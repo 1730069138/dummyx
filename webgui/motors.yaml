@@ -1,0 +1,15 @@
+nodes:
+  - id: 1
+    reduction: 80
+  - id: 2
+    reduction: 80
+  - id: 3
+    reduction: 80
+  - id: 4
+    reduction: 50
+  - id: 5
+    reduction: 50
+  - id: 6
+    reduction: 50
+  - id: 7
+    reduction: 50
