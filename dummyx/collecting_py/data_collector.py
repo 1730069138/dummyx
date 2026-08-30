@@ -47,12 +47,18 @@ def reset_scene(model, data):
     mujoco.mj_forward(model, data)
 
 def main():
-    xml_path = "dummyx_apf_scene.xml"
+    # 👇 修改位置 1：动态获取根目录 dummyx/ 绝对路径
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # 👇 修改位置 2：基于根目录读取 xml
+    xml_path = os.path.join(BASE_DIR, "dummyx_apf_scene.xml")
     model = mujoco.MjModel.from_xml_path(xml_path)
     data = mujoco.MjData(model)
 
     renderer = mujoco.Renderer(model, height=256, width=256)
-    save_dir = "dataset_pure_grasp" 
+    
+    # 👇 修改位置 3：统一存放于根目录的 datasets 文件夹下
+    save_dir = os.path.join(BASE_DIR, "datasets", "dataset_pure_grasp") 
     os.makedirs(save_dir, exist_ok=True)
 
     # 💡 核心修改 1：把追踪目标彻底改为我们刚刚添加的 tcp_site！

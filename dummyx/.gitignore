@@ -1,0 +1,8 @@
+.vscode/
+__pycache__/
+*.py[cod]
+
+# Local datasets and captured recordings are too large for source control.
+datasets/
+recordings/
+

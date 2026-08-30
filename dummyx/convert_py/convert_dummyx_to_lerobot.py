@@ -15,10 +15,16 @@ import tyro
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, HF_LEROBOT_HOME
 
 def main(
-    data_dir: str = "dataset_pure_grasp", 
+    # 👇 修改位置 1：默认读取统管目录下的 dataset_pure_grasp
+    data_dir: str = "datasets/dataset_pure_grasp", 
     repo_id: str = "local/dummyx_grasp", 
     push_to_hub: bool = False
 ):
+    # 👇 修改位置 2：根据 BASE_DIR 自动转换为绝对路径
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.isabs(data_dir):
+        data_dir = os.path.join(BASE_DIR, data_dir)
+        
     # 1. 查找所有 episode 文件夹
     ep_dirs = sorted(glob.glob(os.path.join(data_dir, "ep_*")))
     if not ep_dirs:

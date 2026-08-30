@@ -24,6 +24,9 @@ TASK_DESCRIPTIONS = [
     "Grasp the screwdriver and transfer it into the express parcel box nearby."
 ]
 
+# 👇 修改位置 1：声明全局获取根目录 dummyx/ 绝对路径的常量
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 class DataCollector:
     def __init__(self):
         self.controller = MotorController()
@@ -57,8 +60,12 @@ class DataCollector:
 
     def start_hardware(self):
         print("[1/3] 正在启动 CAN 控制器...")
-        with open('motors.yaml', 'r') as f:
+        
+        # 👇 修改位置 2：根据 BASE_DIR 获取根目录下的 motors.yaml
+        yaml_path = os.path.join(BASE_DIR, 'motors.yaml')
+        with open(yaml_path, 'r') as f:
             motor_config = yaml.safe_load(f)
+            
         for node in motor_config['nodes']:
             self.controller.add_motor(node['id'], reduction=node['reduction'])
         if self.controller.is_initialized():
@@ -91,8 +98,10 @@ class DataCollector:
         except Exception as e:
             print(f"相机启动异常: {e}")
         
-        if not os.path.exists('datasets'):
-            os.makedirs('datasets')
+        # 👇 修改位置 3：根据 BASE_DIR 生成保存路径文件夹
+        datasets_path = os.path.join(BASE_DIR, 'datasets')
+        if not os.path.exists(datasets_path):
+            os.makedirs(datasets_path)
 
     def park_robot(self):
         """安全收臂：逆序逐一返回全局待机姿态"""
@@ -183,7 +192,8 @@ class DataCollector:
             self.is_running = False
 
     def start_recording(self):
-        base_dir = "datasets"
+        # 👇 修改位置 4：根据 BASE_DIR 指派录制保存路径
+        base_dir = os.path.join(BASE_DIR, "datasets")
         os.makedirs(base_dir, exist_ok=True)
         
         # 1. 扫描并计算下一个顺序的 Episode 序号

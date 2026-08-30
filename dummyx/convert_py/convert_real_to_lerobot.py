@@ -11,10 +11,16 @@ import tyro
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, HF_LEROBOT_HOME
 
 def main(
-    data_dir: str = "datasets", # 确认你的文件夹名字是 datasets
+    # 👇 修改位置 1：设定默认读取目录名称为 datasets
+    data_dir: str = "datasets", 
     repo_id: str = "local/dummyx_real", 
     push_to_hub: bool = False
 ):
+    # 👇 修改位置 2：根据 BASE_DIR 自动转换为绝对路径
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.isabs(data_dir):
+        data_dir = os.path.join(BASE_DIR, data_dir)
+        
     # 1. 查找所有 episode 文件夹
     ep_dirs = sorted(glob.glob(os.path.join(data_dir, "episode_*")))
     if not ep_dirs:
@@ -27,7 +33,8 @@ def main(
     with open(os.path.join(ep_dirs[0], "metadata.json"), "r", encoding="utf-8") as f:
         meta = json.load(f)
     
-    cameras_count = meta.get("cameras_count", 1)
+    # 🚨 核心修改 1：强制截断！不管原数据有几个相机，最多只转换前 2 个 (cam_0和cam_1)
+    cameras_count = min(meta.get("cameras_count", 1), 2)
     record_fps = meta.get("fps_target", 30)
     
     # 3. 清理旧缓存
@@ -41,12 +48,13 @@ def main(
         "action": {"dtype": "float32", "shape": (7,), "names": ["motors"]},
     }
     
-    cam_name_mapping = ["cam_fixed", "cam_wrist", "cam_third"]
+    # 🚨 核心修改 2：去掉了 "cam_third"，只保留前两个
+    cam_name_mapping = ["cam_fixed", "cam_wrist"]
     for i in range(cameras_count):
         feature_name = cam_name_mapping[i] if i < len(cam_name_mapping) else f"cam_{i}"
         features[f"observation.images.{feature_name}"] = {
             "dtype": "image",
-            "shape": (240, 424, 3), # 对应 RealSense 录制的尺寸
+            "shape": (240, 424, 3), 
             "names": ["height", "width", "channels"],
         }
 
@@ -76,13 +84,11 @@ def main(
             state_arm = [step["positions"][str(j)] for j in range(1, 7)]
             action_arm = [next_step["positions"][str(j)] for j in range(1, 7)]
             
-            # 提取 7 轴(夹爪)并进行二值化处理
+            # 👇 删掉之前的二值化，直接透传真实采集的连续值！
             gripper_state = step["positions"]["7"]
-            gripper_next_pos = next_step["positions"]["7"]
+            gripper_action = next_step["positions"]["7"]
             
-            # 二值化逻辑：重建你的控制意图 (0为闭合, 50为张开)
-            gripper_action = 50.0 if gripper_next_pos > 25.0 else 0.0
-            
+            # 合并为最终数组
             state_arr = np.array(state_arm + [gripper_state], dtype=np.float32)
             action_arr = np.array(action_arm + [gripper_action], dtype=np.float32)
             
@@ -92,17 +98,15 @@ def main(
                 "task": task_instruction,
             }
             
-            # 处理多相机图像
+            # 处理多相机图像 (此时 cameras_count 最大只有 2)
             for cam_idx in range(cameras_count):
                 feature_name = cam_name_mapping[cam_idx] if cam_idx < len(cam_name_mapping) else f"cam_{cam_idx}"
                 img_file_name = step["images"].get(f"cam_{cam_idx}")
                 
                 if img_file_name:
-                    # 💡 关键：拼接路径为 datasets/episode_X/images/0.jpg
                     img_abs_path = os.path.join(ep_dir, "images", img_file_name)
                     img_bgr = cv2.imread(img_abs_path)
                     if img_bgr is not None:
-                        # 转换 BGR 为 RGB 供训练使用
                         frame_dict[f"observation.images.{feature_name}"] = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                 
             dataset.add_frame(frame_dict)

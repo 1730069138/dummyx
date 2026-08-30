@@ -1,0 +1,76 @@
+import cv2
+import os
+
+def images_to_video(image_folder, video_name, fps=30):
+    """
+    将文件夹内的图片序列转换为视频。
+    """
+    # 1. 获取文件夹内所有图片文件（支持 .jpg 和 .png）
+    images = [img for img in os.listdir(image_folder) if img.lower().endswith((".jpg", ".png"))]
+    
+    if not images:
+        print(f"错误: 在 '{image_folder}' 中未找到任何 .jpg 或 .png 图片！")
+        return
+
+    # 2. 对图片进行排序以保证视频帧的连贯性
+    # 默认按字母顺序排序。如果你的数据集是以数字命名的 (例如 1.png, 2.png ... 10.png)，
+    # 为了防止 10.png 排在 2.png 前面，这里使用提取数字的方式进行排序：
+    try:
+        images.sort(key=lambda x: int(''.join(filter(str.isdigit, x))))
+    except ValueError:
+        # 如果文件名中没有数字，则回退到常规排序
+        images.sort()
+
+    # 3. 读取第一张图片，用于获取视频的宽高分辨率
+    first_image_path = os.path.join(image_folder, images[0])
+    frame = cv2.imread(first_image_path)
+    if frame is None:
+        print(f"错误: 无法读取图片 '{first_image_path}'。")
+        return
+        
+    height, width, layers = frame.shape
+
+    # 4. 初始化视频写入对象 (VideoWriter)
+    # 使用 'mp4v' 编码器生成 .mp4 格式视频
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    video = cv2.VideoWriter(video_name, fourcc, fps, (width, height))
+
+    print(f"开始生成视频，共检测到 {len(images)} 张图片...")
+    print(f"视频分辨率: {width}x{height}, 帧率: {fps} FPS")
+
+    # 5. 遍历图片并写入视频
+    for i, image in enumerate(images):
+        img_path = os.path.join(image_folder, image)
+        frame = cv2.imread(img_path)
+        
+        # 确保读取到的图片尺寸与第一张图一致，否则会导致写入失败
+        if frame.shape[:2] != (height, width):
+            frame = cv2.resize(frame, (width, height))
+            
+        video.write(frame)
+        
+        # 打印进度
+        if (i + 1) % 50 == 0:
+            print(f"已处理 {i + 1}/{len(images)} 张图片...")
+
+    # 6. 释放资源
+    video.release()
+    cv2.destroyAllWindows()
+    print(f"\n视频生成完毕！已成功保存为: {video_name}")
+
+if __name__ == "__main__":
+    # ==========================================
+    # 请在这里修改为你的实际参数
+    # ==========================================
+    
+    # 你存放数据集图片的文件夹路径 (可以是相对路径或绝对路径)
+    IMAGE_FOLDER = "/home/jun/dummyx/sim/mujoco/mujoco-learning/model/dummyx/datasets/dataset_anomaly_cleanup/ep_0/cam_wrist" 
+    
+    # 想要生成的视频文件名和保存路径
+    OUTPUT_VIDEO = "/home/jun/dummyx/sim/mujoco/mujoco-learning/model/dummyx/dataset_preview.mp4"
+    
+    # 视频帧率 (FPS)。这里修改为 60，以实现 2 倍速播放效果（假设原始采集频率为 30Hz）。
+    FPS = 60 
+    
+    # 执行转换
+    images_to_video(IMAGE_FOLDER, OUTPUT_VIDEO, FPS)

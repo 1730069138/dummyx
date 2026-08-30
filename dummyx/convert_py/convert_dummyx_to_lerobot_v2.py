@@ -15,15 +15,30 @@ import tyro
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, HF_LEROBOT_HOME
 
 def main(
-    data_dir: str = "dataset_screwdriver_insertion", 
+    # 👇 修改位置 1：默认读取路径改为统管目录 datasets 下的新清理数据集
+    data_dir: str = "datasets/dataset_anomaly_cleanup", 
     repo_id: str = "local/dummyx_grasp", 
     push_to_hub: bool = False
 ):
+    # 👇 修改位置 2：动态获取根目录 dummyx/，并将传入的 data_dir 转换为绝对路径
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.isabs(data_dir):
+        data_dir = os.path.join(BASE_DIR, data_dir)
+        
     # 1. 查找所有 episode 文件夹
-    ep_dirs = sorted(glob.glob(os.path.join(data_dir, "ep_*")))
+    ep_dirs = glob.glob(os.path.join(data_dir, "ep_*"))
     if not ep_dirs:
         print(f"❌ 错误：在 {data_dir} 中未找到任何数据文件夹！")
         return
+        
+    # 💡 核心修复1：自定义排序函数，按文件夹后的真实数字大小排序 (解决 ep_10 排在 ep_2 前面的问题)
+    def get_ep_num(dir_path):
+        try:
+            return int(os.path.basename(dir_path).split('_')[1])
+        except ValueError:
+            return -1
+            
+    ep_dirs = sorted(ep_dirs, key=get_ep_num)
         
     print(f"🔍 找到 {len(ep_dirs)} 条轨迹数据，准备转换为 LeRobot 格式...")
 
@@ -37,7 +52,7 @@ def main(
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         robot_type="dummyx",
-        fps=10,
+        fps=50, # 💡 核心修复2：与采集器严格对齐，改为 50Hz 物理频率！
         features={
             "observation.images.cam_fixed": {
                 "dtype": "image",
@@ -101,9 +116,9 @@ def main(
         # 保存这一个 Episode（不需要参数）
         dataset.save_episode()
 
-    # 生成最终索引文件 (Parquet)
+    # 💡 核心修复3：解开注释，生成训练必备的 Parquet 索引文件
     print("\n📦 正在整合数据集，这可能需要一点时间...")
-    #dataset.consolidate()
+    # dataset.consolidate()
     
     print(f"\n🎉 转换完成！数据集已保存在: {output_path}")
 
