@@ -9,7 +9,7 @@ import yaml
 import sys
 import tty
 import termios
-import can  # <--- 新增的导入
+import can
 from datetime import datetime
 import pyrealsense2 as rs
 from motorcontroller import MotorController
@@ -32,10 +32,23 @@ class DataCollector:
         self.is_running = True
         self.current_episode_path = ""
         self.frames_data = []
-        self.step_size = 5.0  # 键盘控制步长 (度)
         
-        # 目标位置缓存 (同步当前真实位置)
+        # 默认每次按键移动 1.0 度
+        self.step_size = 1.0  
+        
+        # 目标位置缓存
         self.targets = {i: 0.0 for i in range(1, 8)}
+        
+        # 各关节物理安全角度限制 (Min, Max)
+        self.joint_limits = {
+            1: (5.0, 340.0),
+            2: (10.0, 180.0),
+            3: (-180.0, 0.0),
+            4: (-230.0, -10.0),
+            5: (10.0, 220.0),
+            6: (10.0, 280.0),
+            7: (-120.0, 0.0) 
+        }
         
         # 多相机管线列表
         self.pipelines = []
@@ -45,32 +58,68 @@ class DataCollector:
         self.interval = 1.0 / self.record_hz
 
     def getch(self):
-        """Linux 原生读取单个按键"""
+        """Linux 原生非阻塞读取单个按键输入"""
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
             tty.setraw(sys.stdin.fileno())
             ch = sys.stdin.read(1)
-            if ch == '\x03': raise KeyboardInterrupt
+            if ch == '\x03': # 捕获 Ctrl+C
+                raise KeyboardInterrupt
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         return ch
 
     def start_hardware(self):
-        print("[1/3] 正在启动 CAN 控制器...")
+        print("[1/4] 正在加载 motors.yaml 并接入 CAN 总线...")
         with open('motors.yaml', 'r') as f:
             motor_config = yaml.safe_load(f)
         for node in motor_config['nodes']:
             self.controller.add_motor(node['id'], reduction=node['reduction'])
+            
         if self.controller.is_initialized():
             self.controller.start()
-            # 同步初始位置
-            time.sleep(1.0)
+            
+            # ------------------ 新增：驱动至固定初始姿态 ------------------
+            print("[2/4] 正在将机械臂驱动至设定的初始姿态...")
+            initial_poses = {
+                1: 180.0,
+                2: 80.0,
+                3: -100.0,
+                4: -120.0,
+                5: 115.0,
+                6: 140.0,
+                7: -115.0
+            }
+            
             for i in range(1, 8):
-                if i in self.controller.motors:
-                    self.targets[i] = self.controller.motors[i].position
+                motor = self.controller.motors.get(i)
+                if motor:
+                    motor.set_position(initial_poses[i])
+                    print(f"      -> 指令下发: 关节 [{i}] 目标 {initial_poses[i]}°")
+                    
+            print("      等待机械臂到达初始位置 (3秒)...")
+            time.sleep(3.0)
+
+            # --------------------------------------------------------------
+            print("[3/4] 正在重新读取底层真实电机位置，作为键盘控制的基准...")
+            for i in range(1, 8):
+                motor = self.controller.motors.get(i)
+                if motor:
+                    motor.reference_status()
+                    
+            time.sleep(0.5) 
+            
+            for i in range(1, 8):
+                motor = self.controller.motors.get(i)
+                if motor:
+                    self.targets[i] = motor.position
+                    print(f"      -> 关节 [{i}] 真实角度已同步: {self.targets[i]:.1f}°")
+        else:
+            print("错误: CAN 总线挂载失败。")
+            return
         
-        print("[2/3] 正在开启多路 D415 相机 (424x240 @ 30FPS)...")
+        print("[4/4] 正在开启多路 D415 相机 (424x240 @ 30FPS)...")
         try:
             ctx = rs.context()
             devices = ctx.query_devices()
@@ -96,16 +145,15 @@ class DataCollector:
 
     def park_robot(self):
         """安全收臂：逆序逐一返回全局待机姿态"""
-        # 修改点：将第 7 关节的目标位置从 0.0 改为 120.0
-        HOME_POSITIONS = {
-            1: 180.0, 2: 80.0, 3: -86.0, 
-            4: -130.0, 5: 150.0, 6: 130.0, 7: 120.0
+        homing_params = {
+            1: 180.0, 2: 80.0, 3: -100.0, 
+            4: -120.0, 5: 115.0, 6: 140.0, 7: -115.0
         }
         print("\n\n[系统] 正在执行安全收臂：从末端向基座逆序归位...")
         
-        for m_id in sorted(HOME_POSITIONS.keys(), reverse=True):
+        for m_id in sorted(homing_params.keys(), reverse=True):
             if m_id in self.controller.motors:
-                pos = HOME_POSITIONS[m_id]
+                pos = homing_params[m_id]
                 self.targets[m_id] = pos  
                 motor = self.controller.motors[m_id]
                 motor.set_position(pos)
@@ -136,21 +184,16 @@ class DataCollector:
         
         print("[系统] 逆序归位全部完成！随时可进行下一步操作。\n")
 
-    # ==========================================
-    # 🚨 终极闪电版：第七关节专属控制 (非阻塞急停)
-    # ==========================================
     def auto_operate_gripper(self, action):
+        """极速专属控制逻辑"""
         motor = self.controller.motors[7]
-        
-        # 真实物理边界
-        MAX_OPEN = 0.0
-        MAX_CLOSE = 120.0
-        TORQUE_THRESHOLD = 0.03  # 阻力阈值 (恢复为你的自定义值)
+        MAX_OPEN = -115.0  # 修改：张开到-115度
+        MAX_CLOSE = 0.0    # 修改：闭合到0度
+        TORQUE_THRESHOLD = 0.03
         
         if action == 'open':
             sys.stdout.write("\n⚡ 夹爪极速张开 🖐️... ")
             sys.stdout.flush()
-            
             self.targets[7] = MAX_OPEN
             motor.set_position(self.targets[7])
             print("[已瞬间弹开]")
@@ -158,93 +201,109 @@ class DataCollector:
         elif action == 'close':
             sys.stdout.write("\n⚡ 夹爪极速闭合 ✊... ")
             sys.stdout.flush()
-            
-            # 记录起始位置
             start_pos = motor.position
-            
-            # 1. 发送完全闭合指令
             motor.set_position(MAX_CLOSE)
-            
-            # 2. 【核心修改】等待电机真正起步，避开刚起步时的瞬间摩擦力峰值
             time.sleep(0.15)
             
-            # 3. 进入纯监控模式
             while True:
-                # 【核心修改：停止轰炸总线】不再请求7项数据，精准只请求 Position(2) 和 Torque(0)
-                tx_id = motor.build_can_id(dir_bit=0, cmd_id=0x0F) # 0x0F 即 CMD_ID_GET_VALUE1
+                tx_id = motor.build_can_id(dir_bit=0, cmd_id=0x0F) 
                 with motor.lock:
                     motor.bus.send(can.Message(arbitration_id=tx_id, data=[2], is_extended_id=False))
                     motor.bus.send(can.Message(arbitration_id=tx_id, data=[0], is_extended_id=False))
                 
-                # 【核心修改：等待底层将真实数据通过 CAN 传回来】
                 time.sleep(0.01) 
                 
                 curr_pos = motor.position
                 torque = abs(getattr(motor, 'motor_torque', 0.0))
                 
-                # 情况A：到达物理极限空抓 (给 2 度的容差)
                 if curr_pos >= MAX_CLOSE - 2.0:
                     self.targets[7] = MAX_CLOSE
                     motor.set_position(self.targets[7])
                     print(f"[空抓到底，未碰到物体] 最终位置: {curr_pos:.1f}°")
                     break
                     
-                # 情况B：半路碰到物体
-                # 增加 abs(curr_pos - start_pos) > 2.0 的条件，防止原地未动时误触发
                 if torque > TORQUE_THRESHOLD and abs(curr_pos - start_pos) > 2.0:
-                    # 💥 瞬间急停！把夹爪当前受阻的位置设为目标位置
                     self.targets[7] = curr_pos
-                    
-                    # 【核心修改：连发两次急停指令，并给总线一点点喘息时间，确保 100% 刹停】
                     motor.set_position(self.targets[7])
                     time.sleep(0.01)
                     motor.set_position(self.targets[7])
-                    
                     print(f"[🔒 砰！咬紧物体！急停死锁 (受力 Torque: {torque:.2f}, 夹取位置: {curr_pos:.1f}°)]")
                     break
-                
-                # 控制循环频率，防止占满 CAN 通道
                 time.sleep(0.01)
+
     def keyboard_loop(self):
-        """监听控制指令"""
+        """监听控制指令 (整合限位钳制与步长系统)"""
         mapping = {
-            'q': (1, 1), 'a': (1, -1), 'w': (2, 1), 's': (2, -1),
-            'e': (3, 1), 'd': (3, -1), 'r': (4, 1), 'f': (4, -1),
-            't': (5, 1), 'g': (5, -1), 'y': (6, 1), 'h': (6, -1),
-            # 🚨 夹爪通道：U 为张开，J 为闭合
-            'u': (7, 'open'), 'j': (7, 'close'),
+            'q': (1, 1), 'a': (1, -1),
+            'w': (2, 1), 's': (2, -1),
+            'e': (3, 1), 'd': (3, -1),
+            'r': (4, 1), 'f': (4, -1),
+            't': (5, 1), 'g': (5, -1),
+            'y': (6, 1), 'h': (6, -1),
+            'u': (7, 1), 'j': (7, -1),
         }
         
-        print("\n" + "="*50)
-        print("🎮 采集控制台已就绪:")
-        print("关节控制: Q/A, W/S, E/D, R/F, T/G, Y/H")
-        print("🚨夹爪特权🚨: U(一键极速彻底张开), J(一键极速闭合并死锁)")
-        print("步长调节: Z (减小), X (增加)")
-        print("位置控制: [P] 逆序一键返回全局待机姿态 (Home)")
-        print("录制控制: [C] 开始录制 | [V] 停止并保存 | [B] 回放上次序列")
-        print("退出脚本: Ctrl + C")
-        print("="*50 + "\n")
+        print("\n" + "="*60)
+        print(" 🎮 键盘控制映射已激活 (按下立即生效):")
+        print(" [Q/A] -> 关节1    [W/S] -> 关节2    [E/D] -> 关节3")
+        print(" [R/F] -> 关节4    [T/G] -> 关节5    [Y/H] -> 关节6")
+        print(" [U/J] -> 关节7")
+        print("\n [=] -> 增大单次步长    [-] -> 减小单次步长")
+        print(" 位置控制: [P] 逆序一键返回全局待机姿态 (Home)")
+        print(" 录制控制: [C] 开始录制 | [V] 停止并保存 | [B] 回放上次序列")
+        print(" [ESC] 或 [Ctrl+C] 退出当前脚本 (维持原状态抱死)")
+        print("="*60 + "\n")
 
         try:
             while self.is_running:
                 ch = self.getch().lower()
-                if ch in mapping:
-                    m_id, direction_or_action = mapping[ch]
+                
+                if ch == '\x1b': # ESC 键退出
+                    self.is_running = False
                     
-                    if m_id == 7:
-                        # 走夹爪极速专属通道
-                        self.auto_operate_gripper(direction_or_action)
-                    else:
-                        # 1~6 关节保持原有的步长微调逻辑
-                        self.targets[m_id] += direction_or_action * self.step_size
-                        self.controller.motors[m_id].set_position(self.targets[m_id])
+                elif ch == '=' or ch == '+':
+                    self.step_size += 0.5
+                    sys.stdout.write(f"\r[步长调整] 当前按键步长放大为: {self.step_size:>4.1f}°" + " "*30)
+                    sys.stdout.flush()
+                    
+                elif ch == '-':
+                    self.step_size = max(0.1, self.step_size - 0.5)
+                    sys.stdout.write(f"\r[步长调整] 当前按键步长缩小为: {self.step_size:>4.1f}°" + " "*30)
+                    sys.stdout.flush()
+                    
+                elif ch in mapping:
+                    m_id, direction = mapping[ch]
+                    if m_id in self.controller.motors:
+                        if m_id == 7 and direction == 1:
+                            self.auto_operate_gripper('open')
+                        elif m_id == 7 and direction == -1:
+                            self.auto_operate_gripper('close')
+                        else:
+                            # 理论计算新的目标位置
+                            theoretical_target = self.targets[m_id] + direction * self.step_size
+                            
+                            # 获取该关节的限位范围
+                            min_limit, max_limit = self.joint_limits.get(m_id, (-360.0, 360.0))
+                            
+                            # 钳制逻辑与状态提示
+                            limit_warning = ""
+                            if theoretical_target > max_limit:
+                                new_target = max_limit
+                                limit_warning = f" ⚠️ 达正向极限({max_limit}°)"
+                            elif theoretical_target < min_limit:
+                                new_target = min_limit
+                                limit_warning = f" ⚠️ 达负向极限({min_limit}°)"
+                            else:
+                                new_target = theoretical_target
+    
+                            # 覆盖旧目标值并下发
+                            self.targets[m_id] = new_target
+                            self.controller.motors[m_id].set_position(new_target)
+                            
+                            # 终端清行并打印实时状态
+                            sys.stdout.write(f"\r[键盘操控] 关节 {m_id} 目标 -> {new_target:>6.1f}° | 步长: {self.step_size:>4.1f}°{limit_warning}" + " "*10)
+                            sys.stdout.flush()
                         
-                elif ch == 'x':
-                    self.step_size = min(30.0, self.step_size + 1.0)
-                    print(f"-> 当前微调步长: {self.step_size}°")
-                elif ch == 'z':
-                    self.step_size = max(1.0, self.step_size - 1.0)
-                    print(f"-> 当前微调步长: {self.step_size}°")
                 elif ch == 'p':
                     self.park_robot()
                 elif ch == 'c':
@@ -253,6 +312,7 @@ class DataCollector:
                     if self.is_recording: self.stop_recording()
                 elif ch == 'b':
                     self.replay_last_episode()
+                    
         except KeyboardInterrupt:
             self.is_running = False
 
@@ -270,7 +330,6 @@ class DataCollector:
                     pass
                     
         next_ep_num = max(existing_episodes) + 1 if existing_episodes else 1
-        
         self.current_episode_path = os.path.join(base_dir, f"episode_{next_ep_num}")
         
         img_base_path = os.path.join(self.current_episode_path, "images")
@@ -282,7 +341,6 @@ class DataCollector:
         self.is_recording = True
         
         instruction = random.choice(TASK_DESCRIPTIONS)
-        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         metadata = {
             "episode_id": next_ep_num,
@@ -324,10 +382,8 @@ class DataCollector:
             saved_img_paths = {}
             for cam_idx, img in imgs.items():
                 img_name = f"frame_{frame_idx:05d}.jpg"
-                
                 full_save_path = os.path.join(self.current_episode_path, "images", f"cam_{cam_idx}", img_name)
                 cv2.imwrite(full_save_path, img)
-                
                 saved_img_paths[f"cam_{cam_idx}"] = f"cam_{cam_idx}/{img_name}"
             
             self.frames_data.append({
@@ -347,11 +403,11 @@ class DataCollector:
         self.is_recording = False
         with open(os.path.join(self.current_episode_path, "data.json"), 'w') as f:
             json.dump(self.frames_data, f, indent=4)
-        print(f"✅ 录制停止。共保存 {len(self.frames_data)} 步多模态数据至 {self.current_episode_path}")
+        print(f"\n✅ 录制停止。共保存 {len(self.frames_data)} 步多模态数据至 {self.current_episode_path}")
 
     def replay_last_episode(self):
         if not self.current_episode_path or self.is_recording:
-            print("❌ 没有可回放的序列或正在录制中")
+            print("\n❌ 没有可回放的序列或正在录制中")
             return
         
         print(f"\n🎬 开始回放采集的轨迹 ({self.current_episode_path})...")
@@ -368,16 +424,17 @@ class DataCollector:
             elapsed = time.time() - start_t
             time.sleep(max(0, self.interval - elapsed))
             
-        print("✨ 回放结束。")
+        print("\n✨ 回放结束。")
 
     def cleanup(self):
-        print("\n正在安全退出脚本 (保持机械臂当前姿态与使能状态)...")
+        print("\n\n正在安全退出脚本 (保持机械臂当前姿态与使能状态)...")
         for pipe in self.pipelines:
             try:
                 pipe.stop()
             except Exception:
                 pass
         self.controller.stop()
+        print("✅ 已退出。机械臂已平滑留在当前位置。")
 
 if __name__ == "__main__":
     collector = DataCollector()

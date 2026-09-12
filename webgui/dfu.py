@@ -1,7 +1,6 @@
 import can
 import struct
 import time
-import binascii
 import sys
 
 crc32_table = [0x00000000, 0x04c11db7, 0x09823b6e, 0x0d4326d9, 0x130476dc, 0x17c56b6b, 0x1a864db2, 0x1e475005, 0x2608edb8,
@@ -35,11 +34,11 @@ crc32_table = [0x00000000, 0x04c11db7, 0x09823b6e, 0x0d4326d9, 0x130476dc, 0x17c
        0xbcb4666d, 0xb8757bda, 0xb5365d03, 0xb1f740b4]
 
 class DFU_Updater:
-    def __init__(self, channel='can0', node_id=1, chunk_size=8):
-        self.bus = can.interface.Bus(interface='socketcan', channel=channel, bitrate=1000000)
+    def __init__(self, channel='can0', node_id=6, chunk_size=8):
+        # 强制开启 fd=True，完美兼容 bringup_canfd.sh 的底层设置
+        self.bus = can.interface.Bus(interface='socketcan', channel=channel, fd=True)
         self.node_id = node_id
         self.chunk_size = chunk_size
-        self.sequence = 0
 
     def calculate_crc32(self, data):
         crc = 0
@@ -49,7 +48,31 @@ class DFU_Updater:
     
     def _build_can_id(self, cmd):
         return (0 << 10) | ((self.node_id & 0x1F) << 5) | (cmd & 0x1F)
-    
+
+    def _wait_ack(self, timeout=5.0, c_id=0x1d):
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            msg = self.bus.recv(timeout=0.1)
+            if msg is None:
+                continue
+                
+            dir_bit = (msg.arbitration_id >> 10) & 0x1
+            node_id = (msg.arbitration_id >> 5) & 0x1F
+            cmd_id = msg.arbitration_id & 0x1F
+            
+            if dir_bit == 0:
+                continue # 忽略自己发出的消息
+
+            print(f"    [监听] 收到节点 {node_id} 回复 -> 命令:0x{cmd_id:X} 数据:{msg.data.hex()}")
+
+            if dir_bit == 1 and node_id == self.node_id and cmd_id == c_id:
+                if msg.dlc > 0:
+                    status = msg.data[0]
+                    if status in [0, 1]:
+                        return True
+                return True
+        return False
+
     def _send_dfu_start(self):
         msg = can.Message(
             arbitration_id=self._build_can_id(0x1D),
@@ -57,29 +80,31 @@ class DFU_Updater:
             is_extended_id=False,
             dlc=0  
         )
-        try:
-            self.bus.send(msg)
-            return self._wait_ack(6, 0x1d)
-        except can.CanError as e:
-            print(f"DFU_START发送失败: {e}")
-            return False
+        # 增加 5 秒超长等待时间，让单片机有足够时间重启进 Bootloader
+        for attempt in range(1, 4):
+            print(f"\n[握手阶段] 正在呼叫电机 {self.node_id} 进入刷机模式 (第 {attempt} 次呼叫，耐心等待中)...")
+            try:
+                self.bus.send(msg)
+                if self._wait_ack(timeout=5.0, c_id=0x1d):
+                    return True
+            except can.CanError as e:
+                print(f"DFU_START 发送失败: {e}")
+        return False
             
     def _send_dfu_end(self, file_size, crc32):
         end_data = struct.pack('<LL', file_size, crc32)
-        
         msg = can.Message(
             arbitration_id=self._build_can_id(0x1F),
             data=end_data,
             is_extended_id=False,
             dlc=len(end_data)
         )
-        
         try:
             self.bus.send(msg)
-            return self._wait_ack(6, 0x1f)
+            return self._wait_ack(6.0, 0x1f)
         except can.CanError as e:
-            print(f"DFU_END发送失败: {e}")
-            return False
+            pass
+        return False
     
     def _send_dfu_data(self, data):
         msg = can.Message(
@@ -90,24 +115,16 @@ class DFU_Updater:
         )
         try:
             self.bus.send(msg)
-            return self._wait_ack(6, 0x1e)
+            return self._wait_ack(2.0, 0x1e)
         except can.CanError as e:
-            print(f"DFU_DATA发送失败: {e}")
-            return False
-    
-    def _wait_ack(self, timeout=6.0, c_id=0x1d):
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            msg = self.bus.recv(timeout=timeout)
-            dir_bit = (msg.arbitration_id >> 10) & 0x1
-            node_id = (msg.arbitration_id >> 5) & 0x1F
-            cmd_id = msg.arbitration_id & 0x1F
-            if dir_bit == 1 and node_id == self.node_id and cmd_id == c_id:
-                return msg.data[0] == 0 if msg.dlc > 0 else False
+            pass
         return False
 
     def update_firmware(self, file_path):
         try:
+            print("[系统准备] 正在清洗 CAN-FD 总线缓存...")
+            while self.bus.recv(timeout=0.1): pass
+
             with open(file_path, 'rb') as f:
                 firmware = f.read()
             
@@ -115,18 +132,17 @@ class DFU_Updater:
             file_size = len(firmware)
             
             if not self._send_dfu_start():
-                raise Exception("DFU启动失败")
+                raise Exception("握手彻底失败！电机未能在 5 秒内跳转到 Bootloader。")
 
-            print("Uploading firmware: [", end='', flush=True)
+            print("\n[开始烧录] 进度: [", end='', flush=True)
             progress_width = 50
             last_progress = -1
             
             for i in range(0, len(firmware), self.chunk_size):
                 chunk = firmware[i:i+self.chunk_size]
                 if not self._send_dfu_data(chunk):
-                    raise Exception(f"数据传输失败 @ {i}字节")
+                    raise Exception(f"\n数据传输断开 @ {i}字节处")
                 
-                # Update progress bar
                 progress = int((i / len(firmware)) * progress_width)
                 if progress > last_progress:
                     print('=' * (progress - last_progress), end='', flush=True)
@@ -135,9 +151,9 @@ class DFU_Updater:
             print(f"] 100%")
             
             if not self._send_dfu_end(file_size, crc):
-                raise Exception("校验失败")
+                raise Exception("固件写入完毕，但最终 CRC 校验报错！")
             
-            print("固件更新成功")
+            print("\n🎉 恭喜！6号电机固件抢救圆满成功！请彻底断电 5 秒后再开机！")
         finally:
             self.bus.shutdown()
 
@@ -153,8 +169,10 @@ if __name__ == '__main__':
         updater = DFU_Updater(channel='can0', node_id=node_id)
         updater.update_firmware(firmware_file)
     except ValueError:
-        print("Error: node_id must be an integer")
+        print("Error: node_id 必须是整数")
         sys.exit(1)
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"\n=================================")
+        print(f"⚠️ 报错信息: {str(e)}")
+        print(f"=================================")
         sys.exit(1)

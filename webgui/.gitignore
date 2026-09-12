@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Editors and local environments
+.vscode/
+.idea/
+.venv/
+
+# Collected datasets and runtime output
+datasets/
+motor_positions.json
+experiment_metrics.json
+*.log
+
+# Local configuration and temporary files
+.env
+.env.*
+temp_episode/

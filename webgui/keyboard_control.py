@@ -28,7 +28,7 @@ def main():
     
     controller = MotorController()
 
-    print("[1/2] 正在加载 motors.yaml 并接入 CAN 总线...")
+    print("[1/3] 正在加载 motors.yaml 并接入 CAN 总线...")
     try:
         with open('motors.yaml', 'r') as file:
             motor_config = yaml.safe_load(file)
@@ -44,7 +44,30 @@ def main():
         print("错误: CAN 总线挂载失败。")
         return
 
-    print("[2/2] 正在同步当前真实姿态，防止指令跳变...")
+    # ------------------ 新增：驱动至固定初始姿态 ------------------
+    print("[2/3] 正在将机械臂驱动至设定的初始姿态...")
+    initial_poses = {
+        1: 180.0,
+        2: 80.0,
+        3: -100.0,
+        4: -120.0,
+        5: 115.0,
+        6: 140.0,
+        7: -115.0
+    }
+    
+    for i in range(1, 8):
+        motor = controller.motors.get(i)
+        if motor:
+            motor.set_position(initial_poses[i])
+            print(f"      -> 指令下发: 关节 [{i}] 目标 {initial_poses[i]}°")
+            
+    print("      等待机械臂到达初始位置 (3秒)...")
+    time.sleep(3.0) # 给予机械臂足够的运动时间到达初始位置
+
+    # --------------------------------------------------------------
+
+    print("[3/3] 正在重新读取底层真实电机位置，作为键盘控制的基准...")
     targets = {}
     
     # 向所有电机请求一次当前状态
@@ -58,9 +81,9 @@ def main():
     for i in range(1, 8):
         motor = controller.motors.get(i)
         if motor:
-            # 以底层的真实位置作为基准起始点
+            # 严格按照要求：以到达初始位置后的【底层真实读取位置】作为基准起始点
             targets[i] = motor.position
-            print(f"      -> 关节 [{i}] 已同步当前角度: {targets[i]:.1f}°")
+            print(f"      -> 关节 [{i}] 真实角度已同步: {targets[i]:.1f}°")
 
     print("\n" + "="*60)
     print(" 🎮 键盘控制映射已激活 (按下立即生效):")
@@ -84,18 +107,17 @@ def main():
         'u': (7, 1), 'j': (7, -1),
     }
 
-    # ------------------ 新增：软件限位字典 ------------------
     # 根据配置表提取的各关节物理安全角度限制 (Min, Max)
+    # 注意：为了适配第7轴新的初始位置 -115，其下限已从 10 扩大至 -130
     joint_limits = {
         1: (5.0, 340.0),
-        2: (10.0, 150.0),
-        3: (-160.0, -5.0),
-        4: (-240.0, -10.0),
+        2: (10.0, 180.0),
+        3: (-180.0, 0.0),
+        4: (-230.0, -10.0),
         5: (10.0, 220.0),
-        6: (10.0, 225.0),
-        7: (10.0, 120.0)
+        6: (10.0, 280.0),
+        7: (-120.0, 0.0) 
     }
-    # --------------------------------------------------------
 
     try:
         while True:
@@ -117,7 +139,7 @@ def main():
             elif ch in key_mapping:
                 motor_id, direction = key_mapping[ch]
                 if motor_id in controller.motors:
-                    # 1. 理论计算新的目标位置
+                    # 1. 理论计算新的目标位置 (永远在读取到的电机位置/累加位置基础上计算)
                     theoretical_target = targets[motor_id] + direction * step_size
                     
                     # 2. 获取该关节的限位范围，如果字典里没有则默认不限位
@@ -147,7 +169,7 @@ def main():
     finally:
         print("\n\n正在安全退出键盘控制...")
         # 核心：此处仅停止数据监听，绝对不去调用 motor.disable()
-        # 把维持机械臂抗重力的任务交还给跑在另一个终端里的 auto_homing.py
+        # 把维持机械臂抗重力的任务交还给跑在另一个终端里的底层程序
         controller.stop()
         print("✅ 已退出。机械臂已平滑留在当前位置。")
 

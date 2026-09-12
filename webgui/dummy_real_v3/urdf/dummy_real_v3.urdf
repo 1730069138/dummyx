@@ -1,0 +1,618 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot
+  name="dummy_real_v3">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="-0.00530922969443533 -9.54427782774664E-10 0.0424590353863738"
+        rpy="0 0 0" />
+      <mass
+        value="0.235337478735073" />
+      <inertia
+        ixx="0.0004268883293542"
+        ixy="3.55599092214791E-12"
+        ixz="-3.71756735718952E-06"
+        iyy="0.000388960257655424"
+        iyz="3.5130219794007E-12"
+        izz="0.000512654064251891" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="link1">
+    <inertial>
+      <origin
+        xyz="-0.00727417588436838 0.00858231872334255 0.013378368944447"
+        rpy="0 0 0" />
+      <mass
+        value="0.0580677769434733" />
+      <inertia
+        ixx="1.40424233623952E-05"
+        ixy="1.01824370712838E-06"
+        ixz="1.61301333371733E-06"
+        iyy="1.77023501193234E-05"
+        iyz="4.55309910198845E-07"
+        izz="2.24916401315137E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint1"
+    type="revolute">
+    <origin
+      xyz="-0.000340196020443223 0 0.0819999999999999"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="link1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.071779"
+      upper="3.071779"
+      effort="3"
+      velocity="3" />
+  </joint>
+  <link
+    name="link2">
+    <inertial>
+      <origin
+        xyz="-0.000824136655185166 -0.101475729448957 -0.0285873328510396"
+        rpy="0 0 0" />
+      <mass
+        value="0.532653803157237" />
+      <inertia
+        ixx="0.00127151957983072"
+        ixy="3.16499522127297E-05"
+        ixz="2.26604492707342E-06"
+        iyy="0.000286619783603363"
+        iyz="-9.18747440144036E-07"
+        izz="0.00137486519509099" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint2"
+    type="revolute">
+    <origin
+      xyz="-0.035 0.0194999999999999 0.0345"
+      rpy="-1.5707963267949 0 0" />
+    <parent
+      link="link1" />
+    <child
+      link="link2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-1.3963"
+      upper="1.570796"
+      effort="3"
+      velocity="3" />
+  </joint>
+  <link
+    name="link3">
+    <inertial>
+      <origin
+        xyz="0.0582477050339709 0.0100694671586189 -0.000116881848019139"
+        rpy="0 0 0" />
+      <mass
+        value="0.203892843907049" />
+      <inertia
+        ixx="0.000110786626804024"
+        ixy="-9.63365893119795E-06"
+        ixz="1.74520214886043E-05"
+        iyy="0.000167661284757176"
+        iyz="3.7943114152685E-06"
+        izz="0.000162730174644392" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint3"
+    type="revolute">
+    <origin
+      xyz="1.08500777998982E-05 -0.2009945749611 -0.014"
+      rpy="0 0 0" />
+    <parent
+      link="link2" />
+    <child
+      link="link3" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.071779"
+      upper="0.0"
+      effort="3"
+      velocity="3" />
+  </joint>
+  <link
+    name="link4">
+    <inertial>
+      <origin
+        xyz="0.000151394130845781 -0.00316138683917015 0.0894516362098563"
+        rpy="0 0 0" />
+      <mass
+        value="0.195316195681008" />
+      <inertia
+        ixx="0.000264849336427073"
+        ixy="1.90670538490485E-07"
+        ixz="1.34189144308529E-07"
+        iyy="0.00026086985947404"
+        iyz="-2.00279897565163E-05"
+        izz="7.70829382609287E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint4"
+    type="revolute">
+    <origin
+      xyz="0.0599999999999971 -0.0215050042651967 -0.0019912233216972"
+      rpy="1.5707963267949 0 0" />
+    <parent
+      link="link3" />
+    <child
+      link="link4" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.962"
+      upper="1.864"
+      effort="3"
+      velocity="3" />
+  </joint>
+  <link
+    name="link5">
+    <inertial>
+      <origin
+        xyz="4.18496989203869E-05 0.0531120806631206 -0.0244911843420911"
+        rpy="0 0 0" />
+      <mass
+        value="0.13451985055148" />
+      <inertia
+        ixx="5.89904720803095E-05"
+        ixy="1.90835646214316E-12"
+        ixz="-3.44874056234405E-09"
+        iyy="5.26518946126007E-05"
+        iyz="-4.19288036578529E-07"
+        izz="6.06390991313602E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link5.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link5.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint5"
+    type="revolute">
+    <origin
+      xyz="0 -0.0274999993896498 0.10652586267682"
+      rpy="1.5707963267949 0 0" />
+    <parent
+      link="link4" />
+    <child
+      link="link5" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.920"
+      upper="1.57"
+      effort="3"
+      velocity="3" />
+  </joint>
+  <link
+    name="link6">
+    <inertial>
+      <origin
+        xyz="-7.15704231990522E-11 -0.00557266324183965 0.0805997468456355"
+        rpy="0 0 0" />
+      <mass
+        value="0.159075855059689" />
+      <inertia
+        ixx="6.63647316437247E-05"
+        ixy="-1.41596221396415E-14"
+        ixz="3.69445074532846E-13"
+        iyy="6.67951688886097E-05"
+        iyz="2.63614832357626E-06"
+        izz="5.83482258899856E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link6.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link6.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint6"
+    type="revolute">
+    <origin
+      xyz="0 0.0754999999999758 -0.0285241372319494"
+      rpy="-1.5707963267949 0 0" />
+    <parent
+      link="link5" />
+    <child
+      link="link6" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.287"
+      upper="1.703"
+      effort="0"
+      velocity="3" />
+  </joint>
+  <link
+    name="link7">
+    <inertial>
+      <origin
+        xyz="-3.2628760804343E-13 5.97168692800798E-07 0.00674485506613332"
+        rpy="0 0 0" />
+      <mass
+        value="0.0730012394118658" />
+      <inertia
+        ixx="0.000143023815553855"
+        ixy="2.3727950354666E-08"
+        ixz="2.56317031691755E-15"
+        iyy="1.75139782233878E-05"
+        iyz="1.16009104077106E-10"
+        izz="0.000158524488899376" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link7.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link7.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint7"
+    type="fixed">
+    <origin
+      xyz="0 0.000149999389645419 0.1194999984068"
+      rpy="0 0 0" />
+    <parent
+      link="link6" />
+    <child
+      link="link7" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="link8">
+    <inertial>
+      <origin
+        xyz="0.000383623787000666 -0.00773418556885568 0.0191483730693133"
+        rpy="0 0 0" />
+      <mass
+        value="0.0277487200693428" />
+      <inertia
+        ixx="1.01052433994614E-05"
+        ixy="4.34763531418752E-08"
+        ixz="2.15424955071654E-07"
+        iyy="1.35521961193831E-05"
+        iyz="-1.60833234561139E-06"
+        izz="5.60883650981364E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link8.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link8.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint8"
+    type="prismatic">
+    <origin
+      xyz="0 -0.0238309999999988 0.0240000000292074"
+      rpy="0 0 0" />
+    <parent
+      link="link7" />
+    <child
+      link="link8" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-0.03"
+      upper="0.02"
+      effort="0.03"
+      velocity="3" />
+  </joint>
+  <link
+    name="link9">
+    <inertial>
+      <origin
+        xyz="-0.000383623787000624 0.00773418556885568 0.0191483730693133"
+        rpy="0 0 0" />
+      <mass
+        value="0.0277487200693428" />
+      <inertia
+        ixx="1.01052433994615E-05"
+        ixy="4.34763531418713E-08"
+        ixz="-2.15424955071637E-07"
+        iyy="1.35521961193831E-05"
+        iyz="1.60833234561137E-06"
+        izz="5.60883650981377E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link9.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/link9.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint9"
+    type="prismatic">
+    <origin
+      xyz="0 0.0238310000000012 0.0240000000292074"
+      rpy="0 0 0" />
+    <parent
+      link="link7" />
+    <child
+      link="link9" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-0.03"
+      upper="0.02"
+      effort="0.03"
+      velocity="3" />
+    <mimic
+      joint="joint8"
+      multiplier="1"
+      offset="0" />
+  </joint>
+  <link
+    name="camera_link">
+    <inertial>
+      <origin
+        xyz="-0.00134267172068775 6.36643515683488E-16 -0.00996409342222659"
+        rpy="0 0 0" />
+      <mass
+        value="0.0505252272200423" />
+      <inertia
+        ixx="3.63739054216545E-05"
+        ixy="4.96628791761714E-20"
+        ixz="3.11566193617539E-07"
+        iyy="4.53745932663037E-06"
+        iyz="3.75324673686834E-20"
+        izz="3.59554328549467E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/camera_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.5 0.5 0.5 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="/home/jun/dummyx_ws/src/dummy_real_v3/meshes/camera_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="camera_joint"
+    type="fixed">
+    <origin
+      xyz="0.0500408264033172 0 -0.00489670019870858"
+      rpy="0 -0.174532925199404 0" />
+    <parent
+      link="link7" />
+    <child
+      link="camera_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+</robot>

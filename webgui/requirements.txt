@@ -1,2 +1,13 @@
+# Verified with Conda environment: dummyx_vla (Python 3.10.20)
+fastapi==0.135.2
+mujoco==3.8.1
 nicegui==2.7.0
+numpy==1.26.4
+opencv-python==4.10.0.84
+openpi-client==0.1.2
+pyrealsense2==2.56.5.9235
 python-can==4.5.0
+PyYAML==6.0.3
+
+# ROS 2 packages used by dummy_real_v3 are system dependencies. Install and
+# source the appropriate ROS 2 environment separately.
