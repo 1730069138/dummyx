@@ -1,3 +1,4 @@
+from core.paths import MOTORS_CONFIG, DATASETS_DIR
 import os
 import time
 import json
@@ -12,10 +13,10 @@ import termios
 import can
 from datetime import datetime
 import pyrealsense2 as rs
-from motorcontroller import MotorController
+from core.motorcontroller import MotorController
 
 # ==========================================
-# 📋 任务描述池 (Task Description Pool)
+# 📋 任务描述池 
 # ==========================================
 TASK_DESCRIPTIONS = [
     "Pick up the screwdriver and place it into the nearby express box.",
@@ -39,7 +40,7 @@ class DataCollector:
         # 目标位置缓存
         self.targets = {i: 0.0 for i in range(1, 8)}
         
-        # 各关节物理安全角度限制 (Min, Max)
+        # 各关节物理安全角度限制 （最小值、最大值）
         self.joint_limits = {
             1: (5.0, 340.0),
             2: (10.0, 180.0),
@@ -72,7 +73,7 @@ class DataCollector:
 
     def start_hardware(self):
         print("[1/4] 正在加载 motors.yaml 并接入 CAN 总线...")
-        with open('motors.yaml', 'r') as f:
+        with open(MOTORS_CONFIG, 'r') as f:
             motor_config = yaml.safe_load(f)
         for node in motor_config['nodes']:
             self.controller.add_motor(node['id'], reduction=node['reduction'])
@@ -140,8 +141,8 @@ class DataCollector:
         except Exception as e:
             print(f"相机启动异常: {e}")
         
-        if not os.path.exists('datasets'):
-            os.makedirs('datasets')
+        if not os.path.exists(DATASETS_DIR):
+            os.makedirs(DATASETS_DIR)
 
     def park_robot(self):
         """安全收臂：逆序逐一返回全局待机姿态"""
@@ -317,7 +318,7 @@ class DataCollector:
             self.is_running = False
 
     def start_recording(self):
-        base_dir = "datasets"
+        base_dir = DATASETS_DIR
         os.makedirs(base_dir, exist_ok=True)
         
         existing_episodes = []

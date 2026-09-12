@@ -1,17 +1,20 @@
-# cli.py
+from core.paths import MOTORS_CONFIG, RECORDING_FILE, prepare_runtime
+
+prepare_runtime()
+
 import threading
 import time
 import json
 from datetime import datetime
 import yaml
-from motorcontroller import MotorController
+from core.motorcontroller import MotorController
 import cmd
 
 # 全局状态变量
 is_recording = False
 recorded_data = []
 recording_thread = None
-recording_file = "motor_positions.json"
+recording_file = RECORDING_FILE
 calibration_progress = 0
 calibration_in_progress = False
 homing_event = threading.Event()
@@ -29,7 +32,7 @@ class MotorCLI(cmd.Cmd):
     def load_motor_config(self):
         """从YAML文件加载电机配置"""
         try:
-            with open('motors.yaml', 'r') as file:
+            with open(MOTORS_CONFIG, 'r') as file:
                 motor_config = yaml.safe_load(file)
             
             for node in motor_config['nodes']:
@@ -314,7 +317,7 @@ class MotorCLI(cmd.Cmd):
         threading.Thread(target=_calibration_task, daemon=True).start()
 
     def do_save(self, arg):        
-        """执行电机校准 arg is motor id"""
+        """执行电机校准 参数为电机编号"""
         i = 0
         print(f"电机 {i} configs save to MCU...")
         for motor in self.controller.motors.values():                   

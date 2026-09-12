@@ -1,18 +1,19 @@
+"""硬件辅助工具，通过项目入口 run.py 启动。"""
 #!/usr/bin/env python3
 """
-Rdrive Motor Controller - CAN ID 修改工具
+Rdrive 电机控制器：CAN 节点编号修改工具
 
 CAN 协议说明:
-  - 11-bit 标准 CAN ID 格式: [1-bit echo][5-bit node_id][5-bit cmd]
-  - echo bit (bit10): 0=请求, 1=响应
-  - node_id (bit9-5): 设备节点 ID (1~31), 0x1F(31)=广播
-  - cmd (bit4-0): 命令码
+  - 11 位标准 CAN 标识符格式：[1 位响应标志][5 位节点编号][5 位命令码]
+  - 响应标志（第 10 位）: 0=请求, 1=响应
+  - node_id (第 9 至 5 位): 设备节点 ID (1~31), 0x1F(31)=广播
+  - cmd (第 4 至 0 位): 命令码
 
-  SET_CONFIG 命令 (cmd=17): dlc=8, data[0:4]=配置索引(1-based), data[4:8]=新值
-  GET_CONFIG 命令 (cmd=18): dlc=4, data[0:4]=配置索引(1-based)
+  SET_CONFIG 命令 (cmd=17): dlc=8, data[0:4]=配置索引(从 1 开始编号), data[4:8]=新值
+  GET_CONFIG 命令 (cmd=18): dlc=4, data[0:4]=配置索引(从 1 开始编号)
   SAVE_ALL_CONFIG 命令 (cmd=19): dlc=0, 保存所有配置到 Flash
 
-  node_id 在 tUsrConfig 结构中的 1-based 索引 = 30
+  node_id 在 tUsrConfig 结构中的 从 1 开始编号 索引 = 30
 
 依赖: python-can
   pip install python-can
@@ -36,9 +37,9 @@ except ImportError:
 # ============================================================================
 
 # CAN ID 位域定义
-ID_ECHO_BIT = 0x400  # bit10
-ID_NODE_BIT = 0x3E0  # bit9~5
-ID_CMD_BIT  = 0x01F  # bit4~0
+ID_ECHO_BIT = 0x400  # 第 10 位
+ID_NODE_BIT = 0x3E0  # 第 9 至 5 位
+ID_CMD_BIT  = 0x01F  # 第 4 至 0 位
 
 BROADCAST_NODE_ID = 0x1F  # 广播地址 (31)
 
@@ -68,7 +69,7 @@ CAN_CMD_SYNC            = 21
 CAN_CMD_HEARTBEAT       = 22
 CAN_CMD_GET_FW_VERSION  = 28
 
-# tUsrConfig 配置索引 (1-based, 用于 SET_CONFIG / GET_CONFIG)
+# tUsrConfig 配置索引 (从 1 开始编号, 用于 SET_CONFIG / GET_CONFIG)
 # 按 usr_config.h 中 tUsrConfig 结构体字段顺序排列
 CONFIG_INDEX = {
     'invert_motor_dir':       1,
@@ -164,10 +165,10 @@ class RdriveController:
         """
         初始化 CAN 总线连接 (参考 controller.py)
 
-        Args:
-            interface: CAN 接口类型 ('socketcan', 'slcan', 'pcan', 'kvaser', etc.)
+        参数：
+            interface: CAN 接口类型 ('socketcan', 'slcan', 'pcan', 'kvaser' 等)
             channel:   CAN 通道 (Linux: 'can0', Windows PCAN: 'PCAN_USBBUS1',
-                       Serial: '/dev/ttyACM0' 或 'COM3')
+                       串口：'/dev/ttyACM0' 或 'COM3')
         """
         self.timeout = 1.0  # 响应超时时间 (秒)
 
@@ -194,13 +195,13 @@ class RdriveController:
         """
         发送 CAN 帧 并等待响应 (echo)
 
-        Args:
+        参数：
             node_id: 目标节点 ID
             cmd:     命令码
             data:    数据负载 (最多 8 字节)
             timeout: 响应超时时间
 
-        Returns:
+        返回值：
             响应 CAN 消息, 超时返回 None
         """
         if timeout is None:
@@ -240,11 +241,11 @@ class RdriveController:
         """
         读取配置项
 
-        Args:
+        参数：
             node_id:      目标节点 ID
-            config_index: 配置索引 (1-based)
+            config_index: 配置索引 (从 1 开始编号)
 
-        Returns:
+        返回值：
             配置值 (int32), 失败返回 None
         """
         data = int32_to_bytes(config_index)
@@ -265,12 +266,12 @@ class RdriveController:
         """
         设置配置项 (仅修改 RAM, 未保存到 Flash)
 
-        Args:
+        参数：
             node_id:      目标节点 ID
-            config_index: 配置索引 (1-based)
+            config_index: 配置索引 (从 1 开始编号)
             value:        新值 (int32)
 
-        Returns:
+        返回值：
             设置成功返回 True
         """
         data = int32_to_bytes(config_index) + int32_to_bytes(value)
@@ -290,10 +291,10 @@ class RdriveController:
         """
         保存所有配置到 Flash
 
-        Args:
+        参数：
             node_id: 目标节点 ID
 
-        Returns:
+        返回值：
             保存成功返回 True
         """
         # 修改点 3：延长超时时间至 5.0 秒，兼容 Flash 擦除较慢的固件
@@ -313,7 +314,7 @@ class RdriveController:
         """
         获取固件版本号
 
-        Returns:
+        返回值：
             (major, minor) 或 None
         """
         resp = self.send_and_receive(node_id, CAN_CMD_GET_FW_VERSION, b'')
@@ -338,12 +339,12 @@ class RdriveController:
           2. 设置新 node_id (写入 RAM)
           3. (可选) 保存到 Flash
 
-        Args:
+        参数：
             current_id: 当前节点 ID (1~31)
             new_id:     新节点 ID (1~31)
             save:       是否保存到 Flash (默认 True)
 
-        Returns:
+        返回值：
             修改成功返回 True
         """
         if not (1 <= new_id <= 31):
@@ -358,7 +359,7 @@ class RdriveController:
             print(f"✗ 新 ID 与当前 ID 相同 ({current_id})")
             return False
 
-        # Step 1: 验证通信, 读取当前 node_id
+        # 步骤 1： 验证通信, 读取当前 node_id
         print(f"\n[1/3] 读取当前节点 ID (node_id={current_id}) ...")
         read_id = self.get_node_id(current_id)
         if read_id is None:
@@ -373,7 +374,7 @@ class RdriveController:
         if read_id != current_id:
             print(f"  ⚠ 读取到的 ID ({read_id}) 与预期 ({current_id}) 不匹配")
 
-        # Step 2: 设置新 node_id
+        # 步骤 2： 设置新 node_id
         print(f"\n[2/3] 设置新节点 ID: {current_id} → {new_id} ...")
         success = self.set_config(current_id, CONFIG_NODE_ID, new_id)
         if not success:
@@ -384,7 +385,7 @@ class RdriveController:
         print(f"  ⏳ 等待控制器响应 ...")
         time.sleep(0.5)
 
-        # Step 3: 保存到 Flash
+        # 步骤 3： 保存到 Flash
         if save:
             print(f"\n[3/3] 保存配置到 Flash ...")
             # 修改点 1：先尝试用新 ID 发送保存指令

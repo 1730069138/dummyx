@@ -1,5 +1,8 @@
+from core.paths import MOTORS_CONFIG, RECORDING_FILE, prepare_runtime
+
+prepare_runtime()
 from nicegui import ui, app
-from motorcontroller import MotorController
+from core.motorcontroller import MotorController
 from queue import Queue
 import threading
 import time
@@ -26,7 +29,7 @@ except ImportError:
 is_recording = False
 recorded_data = []
 recording_thread = None
-recording_file = "motor_positions.json"
+recording_file = RECORDING_FILE
 
 # === 多相机 & 四通道(拼图)全局变量 ===
 pipelines = []
@@ -295,7 +298,7 @@ def replay_recording():
 
 controller = MotorController()
 
-with open('motors.yaml', 'r') as file:
+with open(MOTORS_CONFIG, 'r') as file:
     motor_config = yaml.safe_load(file)
 
 for node in motor_config['nodes']:
@@ -851,7 +854,7 @@ def update_status_display():
     for i, temp in latest_camera_temps.items():
         ui.run_javascript(f'try {{ document.getElementById("cam_{i}_temp").innerText = "实时温度: {temp:.1f} °C"; }} catch(e) {{}}')
 
-# NiceGUI App
+# NiceGUI 网页应用
 app.title = "Motor Control Panel"
 
 def show_confirm_dialog():
@@ -873,7 +876,7 @@ with ui.row().classes('w-full'):
 
 with ui.tab_panels(tabs, value=menu1).classes('w-full'):
     
-    # === Menu 1: Motor Control ===
+    # === 页面 1：电机控制 ===
     with ui.tab_panel(menu1):
         with ui.card().classes('w-full'):
             ui.label('Motor Control Panel').classes('text-h4')
@@ -896,7 +899,7 @@ with ui.tab_panels(tabs, value=menu1).classes('w-full'):
             status_table = ui.table(columns=columns, rows=[]).classes('w-full')
             
             with ui.row().classes('w-full items-center'):
-                position_input = ui.number(label='Position (turns)', value=0.0).classes('w-32')
+                position_input = ui.number(label='Position (degrees)', value=0.0).classes('w-32')
                 ui.button('+', on_click=lambda: move_motors(position_input.value))
                 ui.button('Home', on_click=lambda: move_motors_home(position_input.value))
                 ui.button('-', on_click=lambda: move_motors_neg(position_input.value))
@@ -943,7 +946,7 @@ with ui.tab_panels(tabs, value=menu1).classes('w-full'):
                 progress_bar = ui.linear_progress(value=0, color='green').classes('w-64')  
                 progress_bar.visible = False  
 
-    # === Menu 2: Settings ===
+    # === 页面 2：参数设置 ===
     with ui.tab_panel(menu2):
         with ui.card().classes('w-full'):
             ui.label('Settings').classes('text-h4')
@@ -1005,7 +1008,7 @@ with ui.tab_panels(tabs, value=menu1).classes('w-full'):
                                 with ui.button(f'Start Calibration', on_click=lambda _, n=node_id: run_calibration_for_motor(n), color='red'):
                                     ui.tooltip(f'Force physical calibration sequence for Motor {node_id}')
 
-    # === Menu 3: Camera Vision ===
+    # === 页面 3：相机画面 ===
     with ui.tab_panel(menu3):
         with ui.card().classes('w-full items-center'):
             ui.label('D415 多通道极限压力测试台').classes('text-h4 text-red-600')
@@ -1059,7 +1062,7 @@ with ui.tab_panels(tabs, value=menu1).classes('w-full'):
                 ui.button('Start Cameras', on_click=start_camera, color='green').classes('w-40')
                 ui.button('Stop Cameras', on_click=stop_camera, color='red').classes('w-40')
 
-    # === Menu 4: Live Charts ===
+    # === 页面 4：实时曲线 ===
     with ui.tab_panel(menu4):
         with ui.card().classes('w-full'):
             ui.label('Motor Telemetry / 关节实时曲线监控').classes('text-h4')

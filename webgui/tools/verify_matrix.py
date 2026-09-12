@@ -1,10 +1,11 @@
+from core.paths import MOTORS_CONFIG, URDF_PATH, load_mujoco_model
 import cv2
 import numpy as np
 import pyrealsense2 as rs
 import mujoco
 import time
 import yaml
-from motorcontroller import MotorController
+from core.motorcontroller import MotorController
 
 # ==========================================
 # 1. 填入刚才算出来的标定矩阵！
@@ -22,8 +23,8 @@ T_base2cam = np.linalg.inv(T_cam2base)
 # ==========================================
 # 2. 初始化硬件与引擎
 # ==========================================
-URDF_PATH = "/home/jun/dummyx/webgui/dummy_real_v3/urdf/dummy_real_v3.urdf"
-model = mujoco.MjModel.from_xml_path(URDF_PATH)
+
+model = load_mujoco_model()
 data = mujoco.MjData(model)
 ee_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "link6") # 依附于上一级的 link6
 
@@ -41,7 +42,7 @@ dist_coeffs = np.zeros(5)
 
 controller = MotorController(interface='socketcan', channel='can0')
 controller.start()
-with open('motors.yaml', 'r') as f:
+with open(MOTORS_CONFIG, 'r') as f:
     for node in yaml.safe_load(f)['nodes']:
         controller.add_motor(node['id'], reduction=node['reduction'])
 time.sleep(1)

@@ -1,10 +1,11 @@
+from core.paths import MOTORS_CONFIG
 import time
 import threading
 import yaml
 import sys
 import struct
 import can
-from motorcontroller import MotorController
+from core.motorcontroller import MotorController
 
 def hardware_polling_loop(controller):
     """
@@ -34,7 +35,7 @@ def smart_homing(motor, node_id, homing_current, homing_pos, expected_pos):
     time.sleep(0.2)
 
     print(f"[{node_id}] 2. 注入防死锁参数 (运行={homing_current}A, 保护=20A)...")
-    tx_id = motor.build_can_id(dir_bit=0, cmd_id=17) # CMD_SET_CONFIG = 0x11
+    tx_id = motor.build_can_id(dir_bit=0, cmd_id=17) # 设置配置命令：0x11
     
     # 设定运行限流
     motor.bus.send(can.Message(arbitration_id=tx_id, data=struct.pack("<If", 7, float(homing_current)), is_extended_id=False))
@@ -200,7 +201,7 @@ def main():
 
     print("[1/5] 正在加载 motors.yaml 并启动 CAN 通信...")
     try:
-        with open('motors.yaml', 'r') as file:
+        with open(MOTORS_CONFIG, 'r') as file:
             motor_config = yaml.safe_load(file)
         for node in motor_config['nodes']:
             controller.add_motor(node['id'], reduction=node['reduction'])

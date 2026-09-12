@@ -1,19 +1,20 @@
-# Python
+# Python 缓存
 __pycache__/
 *.py[cod]
 
-# Editors and local environments
+# 编辑器和本地环境
 .vscode/
 .idea/
 .venv/
 
-# Collected datasets and runtime output
+# 采集数据与运行结果
+runtime/
 datasets/
 motor_positions.json
 experiment_metrics.json
 *.log
 
-# Local configuration and temporary files
+# 本地配置与临时文件
 .env
 .env.*
 temp_episode/

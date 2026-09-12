@@ -1,10 +1,11 @@
+from core.paths import MOTORS_CONFIG
 #!/usr/bin/env python3
 import sys
 import tty
 import termios
 import time
 import yaml
-from motorcontroller import MotorController
+from core.motorcontroller import MotorController
 
 def getch():
     """
@@ -30,7 +31,7 @@ def main():
 
     print("[1/3] 正在加载 motors.yaml 并接入 CAN 总线...")
     try:
-        with open('motors.yaml', 'r') as file:
+        with open(MOTORS_CONFIG, 'r') as file:
             motor_config = yaml.safe_load(file)
         for node in motor_config['nodes']:
             controller.add_motor(node['id'], reduction=node['reduction'])
@@ -107,7 +108,7 @@ def main():
         'u': (7, 1), 'j': (7, -1),
     }
 
-    # 根据配置表提取的各关节物理安全角度限制 (Min, Max)
+    # 根据配置表提取的各关节物理安全角度限制 （最小值、最大值）
     # 注意：为了适配第7轴新的初始位置 -115，其下限已从 10 扩大至 -130
     joint_limits = {
         1: (5.0, 340.0),

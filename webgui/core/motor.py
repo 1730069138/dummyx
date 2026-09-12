@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Dict, List
 
-# CAN Command Definitions
+# CAN 命令定义
 CMD_ID_MOTOR_DISABLE = 0x00
 CMD_ID_MOTOR_ENABLE = 0x01
 CMD_ID_SET_POSITION = 0x04
@@ -109,7 +109,7 @@ class Motor:
         )
         with self.lock:
             self.bus.send(msg)
-        # print(f"Motor {self.node_id}: Sent get status command")
+
 
     def reference_saved_position(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_ID_GET_SAVED_POSITION)
@@ -120,7 +120,7 @@ class Motor:
         )
         with self.lock:
             self.bus.send(msg)
-        # print(f"Motor {self.node_id}: Sent get status command")
+
 
     def reference_value1(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_ID_GET_VALUE1)
@@ -208,11 +208,11 @@ class Motor:
         )
         with self.lock:
             self.bus.send(msg)
-        print(f"Motor {self.node_id}: Sent SET_POSITION: {position} turns")
+        print(f"Motor {self.node_id}: Sent SET_POSITION: {position} degrees")
 
     def set_home(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_ID_SET_HOME)
-        # data = struct.pack("<If", CURRENT_LIMIT, 0.3)
+
         msg = can.Message(
             arbitration_id=tx_id,
             data=[],
@@ -254,8 +254,8 @@ class Motor:
             self.bus.send(msg)
 
     def set_homing_current(self,  homing_current: float):
-        # self.get_config()
-        # print(self.configs.current_limit)
+
+
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_SET_CONFIG)
         data = struct.pack("<If", CURRENT_LIMIT, homing_current)
         msg = can.Message(
@@ -265,7 +265,7 @@ class Motor:
         )
         with self.lock:
             self.bus.send(msg)
-        # PROTECT_OVER_CURRENT
+
         data = struct.pack("<If", PROTECT_OVER_CURRENT, homing_current)
         msg = can.Message(
             arbitration_id=tx_id,
@@ -276,7 +276,7 @@ class Motor:
             self.bus.send(msg)
 
     def set_homing(self, homing_current: float, homing_position, homing_expected_position, timeout, tolerance):
-        # set motor current to lowest to protect motor
+        # 将电流设为较低值以保护电机
         self.get_config()
         time.sleep(2)
         original_current = self.configs.current_limit['current_limit']
@@ -288,21 +288,21 @@ class Motor:
         self.set_homing_velocities(5.0, 10.0, 10.0)
         self.set_position(homing_position)
         start_time = time.time()
-        # timeout = 20.0  # 20 seconds timeout        
+
 
         while not self.status.over_current:
-            # Check if timeout reached
+            # 检查是否超时
             if time.time() - start_time > timeout:
                 print(f"Motor {self.node_id}: Homing timeout after {timeout} seconds!")
                 return 'timeout on step 1'
                 break
             
-            time.sleep(0.1)  # Avoid busy waiting
-            self.reference_status()  # Request status update
+            time.sleep(0.1)  # 避免忙等待
+            self.reference_status()  # 请求更新状态
         else:
-            # This block runs if while loop exits normally (over_current became True)
+            # 循环正常结束后执行此处（过流标志为真）
             print(f"Motor {self.node_id}: Over current detected.")
-            # ok, now we set this point to home
+            # 将当前位置设为零点
             self.error_resets()
             self.disable()
             time.sleep(1)
@@ -313,12 +313,12 @@ class Motor:
             time.sleep(2)
             self.enable()
             time.sleep(1)
-            # finally, we move to a fixed degree with each joint to set it as home point
+            # 最后将各关节移至预设角度并设置零点
             self.set_position(homing_expected_position)
             target_position = homing_expected_position
-            # tolerance = 0.8  
+
             start_time = time.time()
-            # timeout_pos = 20.0  
+
             while True:
                 current_pos = self.position
                 if abs(current_pos - target_position) <= tolerance:
@@ -399,7 +399,7 @@ class Motor:
     def set_config(self, value):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_SET_CONFIG)
         for index in CONFIG_ITEMS:
-            # print(f"Motor {self.node_id}: Sent SET_CONFIG index={index}, value={value[0].value}")
+
             if index == CURRENT_LIMIT:
                 data = struct.pack("<If", index, value[0].value)
             if index == CONTROL_MODE_INDEX:
@@ -414,9 +414,9 @@ class Motor:
                 data = struct.pack("<If", index, value[4].value)
             if index == PROTECT_OVER_CURRENT:
                 data = struct.pack("<If", index, value[5].value)
-            # if index == PROFILE_NODE_ID:
-            #     print(f"Motor {self.node_id}: Sent PROFILE_NODE_ID index={index}, value={value[6].value}")
-            #     data = struct.pack("<II", index, int(value[6].value))
+
+
+
             if index == KP_GAIN:
                 data = struct.pack("<If", index, value[6].value)
             if index == KD_GAIN:
@@ -509,7 +509,7 @@ class Motor:
                 print(f"Encoder Direction: {value:.1f}")
             else:
                 print(f"Encoder Offset: {value}")
-            # print(f"Steps: {steps} Value: {value}")
+
 
     def update_configs(self, msg: can.Message):
         if len(msg.data) >= 8:
@@ -544,9 +544,9 @@ class Motor:
                     self.configs.kd_gain['kd_gain'] = value
                 if index == KI_GAIN:
                     value = struct.unpack("<f", msg.data[4:8])[0]
-                    # print(f"KI Gain: {value:.6f}")
+
                     self.configs.ki_gain['ki_gain'] = value
-                    # self.configs.protect_over_current['protect_over_current'] = value
+
 
     def update_status(self, msg: can.Message):
         if len(msg.data) >= 8:
@@ -561,7 +561,7 @@ class Motor:
                 self.status.under_voltage = bool(error & 0x20000)
                 self.status.over_current = bool(error & 0x40000)
                 self.last_message_time = time.time()
-                # self.position = 0.0
+
     def update_status_all(self, msg: can.Message):
         if len(msg.data) >= 8:
             l, h = struct.unpack("<fI", msg.data[0:8])
@@ -583,10 +583,10 @@ class Motor:
                         self.motor_power = l
                     case _:
                         print(f"Motor {self.node_id}: Unknown status type {h}")
-                # if h == 0:
-                #     self.motor_torque = l
-                # if h == 2:
-                #     self.position = self.turns_to_degrees(l)
+
+
+
+
     
     def get_status_dict(self) -> dict:
         with self.lock:

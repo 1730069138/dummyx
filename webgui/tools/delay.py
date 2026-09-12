@@ -1,3 +1,4 @@
+"""硬件辅助工具，通过项目入口 run.py 启动。"""
 import can
 import time
 import struct
@@ -14,7 +15,7 @@ def test_can_latency():
     
     # 初始化CAN总线
     try:
-        # bus = can.interface.Bus(channel=can_interface, bustype='socketcan', bitrate=500000)
+
         bus = can.Bus(interface='socketcan', channel='can0')
         print("CAN总线初始化成功")
     except Exception as e:
@@ -25,7 +26,7 @@ def test_can_latency():
     CAN_CMD_MOTOR_ENABLE = 1
     
     # 创建消息ID (根据手册第15页的格式)
-    # dir(1bit) | node_id(5bit) | cmd_id(5bit)
+    # 方向（1 位）| 节点编号（5 位）| 命令编号（5 位）
     msg_id = (0 << 10) | ((node_id & 0x1F) << 5) | (CAN_CMD_MOTOR_ENABLE & 0x1F)
     
     # 创建CAN消息 (无数据内容)

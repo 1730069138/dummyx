@@ -1,3 +1,6 @@
+from core.paths import MOTORS_CONFIG, METRICS_FILE, TEMP_EPISODE, DATASETS_DIR, prepare_runtime
+
+prepare_runtime()
 import os
 os.environ["no_proxy"] = "100.64.142.55"
 os.environ["NO_PROXY"] = "100.64.142.55"
@@ -11,7 +14,7 @@ import shutil
 import json
 from datetime import datetime
 import pyrealsense2 as rs
-from motorcontroller import MotorController
+from core.motorcontroller import MotorController
 from openpi_client import websocket_client_policy
 
 # ==========================================
@@ -109,7 +112,7 @@ def recording_worker(controller):
     """专属录制线程：以标准的 30Hz 频率录制与 collect_data.py 完全一致的数据集"""
     global is_running, latest_images, frames_data
     
-    temp_dir = "datasets/temp_episode"
+    temp_dir = TEMP_EPISODE
     if os.path.exists(temp_dir):
         shutil.rmtree(temp_dir, ignore_errors=True)
     os.makedirs(os.path.join(temp_dir, "images/cam_0"), exist_ok=True)
@@ -162,7 +165,7 @@ def init_motors():
     controller = MotorController(interface='socketcan', channel='can0')
     controller.start()
     try:
-        with open('motors.yaml', 'r') as f:
+        with open(MOTORS_CONFIG, 'r') as f:
             motor_config = yaml.safe_load(f)
         for node in motor_config['nodes']:
             controller.add_motor(node['id'], reduction=node['reduction'])
@@ -372,7 +375,7 @@ def main():
         # ========================================================
         # 🚨 2. 新增：实验数据统计与人工判卷系统
         # ========================================================
-        metrics_file = "experiment_metrics.json"
+        metrics_file = METRICS_FILE
         metrics = {"total_trials": 0, "success_count": 0, "collision_count": 0}
         
         if os.path.exists(metrics_file):
@@ -409,7 +412,7 @@ def main():
             print("\n" + "="*50)
             choice = input(f"💾 本次推理共后台录制了 {len(frames_data)} 帧 (30Hz) 完整轨迹数据！\n是否将本次运行保存为新的数据集？(y/n): ")
             if choice.lower() == 'y':
-                base_dir = "datasets"
+                base_dir = DATASETS_DIR
                 os.makedirs(base_dir, exist_ok=True)
                 existing_episodes = []
                 for d in os.listdir(base_dir):
@@ -420,7 +423,7 @@ def main():
                         except ValueError: pass
                         
                 next_ep_num = max(existing_episodes) + 1 if existing_episodes else 1
-                temp_dir = "datasets/temp_episode"
+                temp_dir = TEMP_EPISODE
                 
                 with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
                     metadata = json.load(f)
@@ -435,10 +438,10 @@ def main():
                 shutil.move(temp_dir, target_dir)
                 print(f"✅ 大丰收！已成功将本次推理数据存入 {target_dir}，直接可用于下一轮训练。")
             else:
-                shutil.rmtree("datasets/temp_episode", ignore_errors=True)
+                shutil.rmtree(TEMP_EPISODE, ignore_errors=True)
                 print("🗑️ 已彻底删除本次推理缓存的数据。")
         else:
-            shutil.rmtree("datasets/temp_episode", ignore_errors=True)
+            shutil.rmtree(TEMP_EPISODE, ignore_errors=True)
 
         print("✅ 部署脚本已彻底安全关闭。")
 

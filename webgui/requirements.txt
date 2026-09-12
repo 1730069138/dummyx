@@ -1,13 +1,13 @@
-# Verified with Conda environment: dummyx_vla (Python 3.10.20)
+# 版本采集自 Conda 环境 dummyx_vla（Python 3.10.20），并非全新环境安装验证。
 fastapi==0.135.2
 mujoco==3.8.1
 nicegui==2.7.0
 numpy==1.26.4
-opencv-python==4.10.0.84
+# 标定脚本使用 ArUco 扩展，只安装这一种 OpenCV 发行包。
+opencv-contrib-python==4.10.0.84
 openpi-client==0.1.2
 pyrealsense2==2.56.5.9235
 python-can==4.5.0
 PyYAML==6.0.3
 
-# ROS 2 packages used by dummy_real_v3 are system dependencies. Install and
-# source the appropriate ROS 2 environment separately.
+# dummy_real_v3 使用的 ROS 2 包为系统依赖，请单独安装并加载 ROS 环境。

@@ -1,3 +1,4 @@
+from core.paths import MOTORS_CONFIG, URDF_PATH, load_mujoco_model
 import cv2
 import numpy as np
 import pyrealsense2 as rs
@@ -5,7 +6,7 @@ import mujoco
 import time
 import yaml
 import os
-from motorcontroller import MotorController
+from core.motorcontroller import MotorController
 
 # ==========================================
 # 1. 核心参数设置
@@ -13,7 +14,7 @@ from motorcontroller import MotorController
 # 【请核对】标定板二维码黑色方块的精确边长（单位：米）
 MARKER_SIZE = 0.09669 
 # URDF 绝对路径
-URDF_PATH = "/home/jun/dummyx/webgui/dummy_real_v3/urdf/dummy_real_v3.urdf"
+
 
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 aruco_params = cv2.aruco.DetectorParameters()
@@ -30,7 +31,7 @@ if not os.path.exists(URDF_PATH):
     exit()
 
 try:
-    model = mujoco.MjModel.from_xml_path(URDF_PATH)
+    model = load_mujoco_model()
     data = mujoco.MjData(model)
 except Exception as e:
     print(f"❌ MuJoCo 加载 URDF 失败: {e}")
@@ -63,8 +64,8 @@ controller = MotorController(interface='socketcan', channel='can0')
 controller.start()
 
 try:
-    # 假设 motors.yaml 在当前运行目录下
-    with open('motors.yaml', 'r') as f:
+    # 配置路径以项目根目录为基准
+    with open(MOTORS_CONFIG, 'r') as f:
         motor_config = yaml.safe_load(f)
     for node in motor_config['nodes']:
         controller.add_motor(node['id'], reduction=node['reduction'])

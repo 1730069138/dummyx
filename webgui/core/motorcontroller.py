@@ -1,6 +1,6 @@
 import can
 from typing import Optional, Dict, List
-from motor import Motor, CMD_ID_GET_SAVED_POSITION, CMD_ID_STATUSWORD_REPORT, CMD_GET_CONFIG, CMD_ID_GET_STATUS, CMD_ID_GET_VALUE1, CAN_CMD_SAVE_ALL_CONFIG, CAN_CMD_CALIB_START, CAN_CMD_CALIB_REPORT
+from core.motor import Motor, CMD_ID_GET_SAVED_POSITION, CMD_ID_STATUSWORD_REPORT, CMD_GET_CONFIG, CMD_ID_GET_STATUS, CMD_ID_GET_VALUE1, CAN_CMD_SAVE_ALL_CONFIG, CAN_CMD_CALIB_START, CAN_CMD_CALIB_REPORT
 import threading
 
 class MotorController:
@@ -33,16 +33,16 @@ class MotorController:
             cmd_id = msg.arbitration_id & 0x1F
             
             if dir_bit == 1 and node_id in self.motors and cmd_id == CMD_ID_STATUSWORD_REPORT:
-                # print(f"Motor {node_id}: Received STATUSWORD_REPORT message")
+
                 self.motors[node_id].update_status(msg)
             if dir_bit == 1 and node_id in self.motors and cmd_id == CMD_ID_GET_STATUS:
-                # print(f"Motor {node_id}: Received STATUSWORD_REPORT message")
+
                 self.motors[node_id].update_status(msg)
             if dir_bit == 1 and node_id in self.motors and cmd_id == CMD_ID_GET_VALUE1:
-                # print(f"Motor {node_id}: Received GET_CONFIG message")
+
                 self.motors[node_id].update_status_all(msg)
             if dir_bit == 1 and node_id in self.motors and cmd_id == CMD_GET_CONFIG:
-                # print(f"Motor {node_id}: Received GET_CONFIG message")
+
                 self.motors[node_id].update_configs(msg)
             if dir_bit == 1 and node_id in self.motors and cmd_id == CAN_CMD_SAVE_ALL_CONFIG:
                 print(f"Motor {node_id}: Received SAVE_ALL_CONFIG message")

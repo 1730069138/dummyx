@@ -1,3 +1,4 @@
+"""硬件辅助工具，通过项目入口 run.py 启动。"""
 import pyrealsense2 as rs
 import cv2
 import numpy as np
