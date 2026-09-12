@@ -8,6 +8,7 @@ import sys
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +44,32 @@ class LayoutTests(unittest.TestCase):
                     cwd=directory, capture_output=True, text=True, timeout=30,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_launcher_runs_in_multiprocessing_child(self):
+        """NiceGUI 自动重载的子进程会用 __mp_main__ 执行入口。"""
+        code = (
+            "import runpy, sys; "
+            f"sys.argv = [{str(ROOT / 'run.py')!r}, '--help']; "
+            f"runpy.run_path({str(ROOT / 'run.py')!r}, run_name='__mp_main__')"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, "-c", code], cwd=directory,
+                capture_output=True, text=True, timeout=30,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("gui", result.stdout)
+
+    def test_gui_launcher_preserves_command_for_reloader(self):
+        """GUI 父进程不能丢掉供 NiceGUI 子进程重新分派的命令。"""
+        import run as launcher
+
+        argv = [str(ROOT / "run.py"), "gui"]
+        with patch.object(sys, "argv", argv.copy()), \
+                patch.object(launcher.runpy, "run_module") as run_module:
+            launcher.main()
+            self.assertEqual(sys.argv, argv)
+        run_module.assert_called_once_with("apps.gui", run_name="__main__")
 
     def test_relocated_model_and_resources(self):
         """复制必要资源到新位置，验证没有依赖原机器的绝对路径。"""

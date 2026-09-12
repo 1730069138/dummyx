@@ -24,9 +24,14 @@ def main():
     parser.add_argument("command", choices=COMMANDS)
     parser.add_argument("args", nargs=argparse.REMAINDER)
     options = parser.parse_args()
-    sys.argv = [COMMANDS[options.command], *options.args]
-    runpy.run_module(COMMANDS[options.command], run_name="__main__")
+    module = COMMANDS[options.command]
+    # NiceGUI's auto-reloader starts a fresh process which executes this file
+    # as ``__mp_main__`` and reuses the current argv.  Keep the ``gui`` command
+    # intact so that child process can dispatch to apps.gui again.
+    if options.command != "gui":
+        sys.argv = [module, *options.args]
+    runpy.run_module(module, run_name="__main__")
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__mp_main__"}:
     main()
