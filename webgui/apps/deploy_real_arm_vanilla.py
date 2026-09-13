@@ -1,4 +1,4 @@
-from core.paths import MOTORS_CONFIG, METRICS_FILE, TEMP_EPISODE, DATASETS_DIR, prepare_runtime
+from core.paths import MOTORS_CONFIG, METRICS_FILE, prepare_runtime
 
 prepare_runtime()
 import os
@@ -10,12 +10,13 @@ import cv2
 import numpy as np
 import yaml
 import threading
-import shutil
+import queue
 import json
-from datetime import datetime
 import pyrealsense2 as rs
 from core.motorcontroller import MotorController
+from openpi_client import msgpack_numpy
 from openpi_client import websocket_client_policy
+import websockets.sync.client
 
 # ==========================================
 # 🔑 1. 核心网络与硬件配置
@@ -24,69 +25,61 @@ SERVER_IP = "100.64.142.55"
 SERVER_PORT = 8000
 PROMPT = "Pick up the screwdriver and place it into the nearby express box."
 
-SN_GLOBAL, SN_WRIST = "821312060126", "121622061691"
+SN_GLOBAL, SN_WRIST = "821312060126", "816612062572"
 
 # ==========================================
-# ⚙️ 2. ACT 时序融合与初始执行参数
+# ⚙️ 2. Pi0 动作块执行参数
 # ==========================================
-EXECUTION_HZ = 6.0   
+EXECUTION_HZ = 50.0
 EXEC_INTERVAL = 1.0 / EXECUTION_HZ
-MAX_DEG_PER_STEP = 45.0 / EXECUTION_HZ  
+PREFETCH_ACTIONS = 3
+MAX_TOTAL_STEPS = 9000
 
 STANDBY_POSITIONS = {
-    1: 180.001, 2: 80.001, 3: -85.995, 
-    4: -130.001, 5: 150.001, 6: 130.0, 7: 0.0
+    1: 180.0, 2: 80.0, 3: -100.0,
+    4: -120.0, 5: 115.0, 6: 140.0, 7: -115.0
+}
+
+JOINT_LIMITS = {
+    1: (5.0, 340.0),
+    2: (10.0, 180.0),
+    3: (-180.0, 0.0),
+    4: (-230.0, -10.0),
+    5: (10.0, 220.0),
+    6: (10.0, 280.0),
+    7: (-120.0, 0.0),
 }
 
 is_running = True
 
-# 全局最新画面缓存与数据记录
+# 全局最新画面缓存
 latest_images = {"global": None, "wrist": None}
-frames_data = []
+
+
+class ReliableWebsocketClientPolicy(websocket_client_policy.WebsocketClientPolicy):
+    def _wait_for_server(self):
+        headers = {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None
+        connection = websockets.sync.client.connect(
+            self._uri,
+            compression=None,
+            max_size=None,
+            additional_headers=headers,
+            open_timeout=3,
+            ping_interval=20,
+            ping_timeout=60,
+            close_timeout=2,
+        )
+        metadata = msgpack_numpy.unpackb(connection.recv())
+        return connection, metadata
 
 # ==========================================
-# 🧠 3. ACT 时序融合池
-# ==========================================
-class ACTBuffer:
-    def __init__(self):
-        self.buffer = {}  
-        self.lock = threading.Lock()
-        self.max_received_step = 0
-
-    def add_chunk(self, start_step, chunk):
-        with self.lock:
-            for i, action in enumerate(chunk):
-                abs_step = start_step + i
-                if abs_step not in self.buffer:
-                    self.buffer[abs_step] = []
-                self.buffer[abs_step].append(action)
-                self.max_received_step = max(self.max_received_step, abs_step)
-
-    def get_fused_action(self, step_idx):
-        with self.lock:
-            if step_idx not in self.buffer:
-                return None, 0
-            
-            preds = np.array(self.buffer[step_idx])
-            fused_action = np.mean(preds, axis=0) 
-            
-            keys_to_delete = [k for k in self.buffer.keys() if k < step_idx]
-            for k in keys_to_delete:
-                del self.buffer[k]
-                
-            return fused_action, len(preds)
-
-act_buffer = ACTBuffer()
-current_global_step = 0  
-
-# ==========================================
-# 📷 4. 硬件初始化与线程解耦读取
+# 📷 3. 硬件初始化与线程解耦读取
 # ==========================================
 def init_camera_by_sn(sn, name):
     pipeline = rs.pipeline()
     config = rs.config()
     config.enable_device(sn)
-    config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 60)
+    config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 30)
     pipeline.start(config)
     return pipeline
 
@@ -107,59 +100,6 @@ def camera_worker(p_g, p_w):
                 img = np.asanyarray(f_w.get_color_frame().get_data())
                 latest_images["wrist"] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         except: pass
-
-def recording_worker(controller):
-    """专属录制线程：以标准的 30Hz 频率录制与 collect_data.py 完全一致的数据集"""
-    global is_running, latest_images, frames_data
-    
-    temp_dir = TEMP_EPISODE
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir, ignore_errors=True)
-    os.makedirs(os.path.join(temp_dir, "images/cam_0"), exist_ok=True)
-    os.makedirs(os.path.join(temp_dir, "images/cam_1"), exist_ok=True)
-    
-    metadata = {
-        "episode_id": "temp",
-        "task": "Pick up screwdriver",
-        "instruction": PROMPT,
-        "resolution": "424x240",
-        "fps_target": 30,
-        "cameras_count": 2,
-        "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
-    }
-    with open(os.path.join(temp_dir, "metadata.json"), 'w') as f:
-        json.dump(metadata, f, indent=4)
-        
-    frame_idx = 0
-    interval = 1.0 / 30.0
-    
-    while is_running:
-        start_t = time.time()
-        img_g = latest_images["global"]
-        img_w = latest_images["wrist"]
-        
-        if img_g is not None and img_w is not None:
-            positions = {}
-            for i in range(1, 8):
-                if i in controller.motors:
-                    positions[i] = controller.motors[i].position
-                    
-            name_g = f"frame_{frame_idx:05d}.jpg"
-            cv2.imwrite(os.path.join(temp_dir, "images/cam_0", name_g), cv2.cvtColor(img_g, cv2.COLOR_RGB2BGR))
-            
-            name_w = f"frame_{frame_idx:05d}.jpg"
-            cv2.imwrite(os.path.join(temp_dir, "images/cam_1", name_w), cv2.cvtColor(img_w, cv2.COLOR_RGB2BGR))
-            
-            frames_data.append({
-                "frame_idx": frame_idx,
-                "images": {"cam_0": f"cam_0/{name_g}", "cam_1": f"cam_1/{name_w}"},
-                "positions": positions,
-                "timestamp": time.time()
-            })
-            frame_idx += 1
-            
-        elapsed = time.time() - start_t
-        time.sleep(max(0, interval - elapsed))
 
 def init_motors():
     controller = MotorController(interface='socketcan', channel='can0')
@@ -216,143 +156,218 @@ def return_to_standby(controller):
             break
         time.sleep(0.1)
 
-# ==========================================
-# 🧵 5. 双摄独立推理线程 (动态频率拉伸)
-# ==========================================
-def inference_thread(controller):
-    global is_running, current_global_step, act_buffer, latest_images
-    global EXEC_INTERVAL, MAX_DEG_PER_STEP  
-    
-    np.set_printoptions(precision=2, suppress=True, linewidth=120)
-    policy = None  
-    
+
+def inference_worker(request_queue, result_queue):
+    """在主控制循环请求时推理下一块 Pi0 动作。"""
+    global is_running
+
+    policy = None
+    last_connection_error = None
+
     while is_running:
+        try:
+            obs = request_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+
         if policy is None:
             try:
-                policy = websocket_client_policy.WebsocketClientPolicy(host=SERVER_IP, port=SERVER_PORT)
-                print("\n✅ 成功连接到大模型推理服务器！")
+                policy = ReliableWebsocketClientPolicy(host=SERVER_IP, port=SERVER_PORT)
+                last_connection_error = None
+                print("\n✅ 成功连接到 Pi0 推理服务器！")
             except Exception as e:
-                print(f"\r⏳ 正在等待/重连大模型服务器... ({e})", end="")
+                error = str(e)
+                if error != last_connection_error:
+                    print(f"\n⏳ 正在等待/重连 Pi0 推理服务器... ({error})")
+                    last_connection_error = error
+                try:
+                    result_queue.put_nowait(("error", error))
+                except queue.Full:
+                    pass
                 time.sleep(1.0)
                 continue
 
-        img_g = latest_images["global"]
-        img_w = latest_images["wrist"]
-        
-        if img_g is None or img_w is None:
-            time.sleep(0.01)
-            continue
-            
-        curr_qpos = np.array([controller.motors[i].position for i in range(1, 8)])
-        obs = {"cam_global": img_g, "cam_wrist": img_w, "state": curr_qpos, "prompt": PROMPT}
-        
-        img_start_step = current_global_step
-        
         try:
-            t_start = time.time()
-            res = policy.infer(obs)
-            t_cost = time.time() - t_start
-            
-            raw_chunk = np.array(res["actions"]) 
-            chunk_len = len(raw_chunk)
-            
-            if np.max(np.abs(raw_chunk)) < 6.3 and np.max(np.abs(curr_qpos)) > 20:
-                raw_chunk = raw_chunk * (180.0 / np.pi)
-                
-            if t_cost > 0 and chunk_len > 0:
-                target_hz = (chunk_len * 0.7) / t_cost
-                target_hz = np.clip(target_hz, 20.0, 30.0) 
-                
-                EXEC_INTERVAL = 1.0 / target_hz
-                MAX_DEG_PER_STEP = 45.0 / target_hz  
-                
-            act_buffer.add_chunk(img_start_step, raw_chunk)
-            
+            infer_start = time.time()
+            result = policy.infer(obs)
+            infer_time = time.time() - infer_start
+
+            action_chunk = np.asarray(result["actions"], dtype=np.float32)
+            if action_chunk.ndim != 2 or action_chunk.shape[1] != 7:
+                raise RuntimeError(f"Pi0 返回异常 action shape: {action_chunk.shape}")
+            if not np.all(np.isfinite(action_chunk)):
+                raise RuntimeError("Pi0 返回动作包含 NaN/Inf")
+
+            result_queue.put(("ok", action_chunk, infer_time))
         except Exception as e:
-            if is_running: 
+            if is_running:
                 print(f"\n❌ 推理通信异常: {e}")
-                policy = None  
-            time.sleep(0.5)
+            policy = None
+            try:
+                result_queue.put_nowait(("error", str(e)))
+            except queue.Full:
+                pass
 
 # ==========================================
-# 🚀 6. 主程序
+# 🚀 4. 主程序
 # ==========================================
 def main():
-    global is_running, current_global_step, frames_data
-    global EXEC_INTERVAL, MAX_DEG_PER_STEP
+    global is_running
     
     controller = init_motors()
     p_g = init_camera_by_sn(SN_GLOBAL, "全局")
     p_w = init_camera_by_sn(SN_WRIST, "手腕")
     
     time.sleep(2)
-    print("\n✅ VLA 动作部署启动 (后台数据集 30Hz 同步录制中)！")
+    print("\n✅ VLA 动作部署启动！")
     
     cam_thread = threading.Thread(target=camera_worker, args=(p_g, p_w))
     cam_thread.daemon = True
     cam_thread.start()
-    
-    rec_thread = threading.Thread(target=recording_worker, args=(controller,))
-    rec_thread.daemon = True
-    rec_thread.start()
-    
-    brain_thread = threading.Thread(target=inference_thread, args=(controller,))
-    brain_thread.daemon = True
+
+    request_queue = queue.Queue(maxsize=1)
+    result_queue = queue.Queue(maxsize=1)
+    brain_thread = threading.Thread(
+        target=inference_worker,
+        args=(request_queue, result_queue),
+        daemon=True,
+    )
     brain_thread.start()
     
     home_arr = np.array([STANDBY_POSITIONS[i] for i in range(1, 7)])
     home_counter = 0
     HOME_THRESHOLD = 12 
     has_left_home = False  
+    total_step = 0
+    step_limit_failed = False
+    chunk_number = 0
+    action_chunk = None
+    chunk_step = 0
+    latest_infer_time = 0.0
+    inference_requested = False
+    waiting_for_action_logged = False
+    np.set_printoptions(precision=2, suppress=True, linewidth=120)
     
     try:
         while is_running:
-            loop_start = time.time()
-            fused_target, num_preds = act_buffer.get_fused_action(current_global_step)
-            
-            if fused_target is not None:
-                curr_qpos = np.array([controller.motors[i].position for i in range(1, 8)])
-                diff_from_home = np.max(np.abs(curr_qpos[:6] - home_arr))
-                
-                if not has_left_home and diff_from_home > 15.0:
-                    has_left_home = True
-                    print("\n🚀 机械臂已离开待机位，开始执行抓取任务！")
-                
-                if has_left_home and diff_from_home < 5.0:
-                    home_counter += 1
-                else:
-                    home_counter = 0
-                    
-                if home_counter >= HOME_THRESHOLD:
-                    print("\n\n🎉 机械臂已完成任务并主动返回 P 键待机位！判定任务结束，准备收车...")
-                    break 
-                
-                delta = fused_target - curr_qpos
-                delta[:6] = np.clip(delta[:6], -MAX_DEG_PER_STEP, MAX_DEG_PER_STEP)
-                delta[6] = np.clip(delta[6], -MAX_DEG_PER_STEP * 3, MAX_DEG_PER_STEP * 3)
-                safe_target = curr_qpos + delta
-                
-                if safe_target[6] > curr_qpos[6]:
-                    motor_7 = controller.motors[7]
-                    torque_7 = abs(getattr(motor_7, 'torque', getattr(motor_7, 'current', 0.0)))
-                    
-                    TORQUE_THRESHOLD = 0.03
-                    if torque_7 > TORQUE_THRESHOLD:
-                        safe_target[6] = curr_qpos[6]
-                        gripper_state = f'受阻锁死🔒 (力矩:{torque_7:.3f})'
+            if total_step >= MAX_TOTAL_STEPS:
+                step_limit_failed = True
+                print(
+                    f"\n\n❌ 已达到最大执行步数 {MAX_TOTAL_STEPS}，"
+                    "本次任务自动判定失败。"
+                )
+                break
+
+            if action_chunk is None and not inference_requested:
+                img_g = latest_images["global"]
+                img_w = latest_images["wrist"]
+                if img_g is not None and img_w is not None:
+                    curr_qpos = np.array(
+                        [controller.motors[i].position for i in range(1, 8)]
+                    )
+                    request_queue.put(
+                        {
+                            "cam_global": img_g.copy(),
+                            "cam_wrist": img_w.copy(),
+                            "state": curr_qpos,
+                            "prompt": PROMPT,
+                        }
+                    )
+                    inference_requested = True
+
+            if action_chunk is None or chunk_step >= len(action_chunk):
+                try:
+                    result = result_queue.get_nowait()
+                    if result[0] == "ok":
+                        _, action_chunk, latest_infer_time = result
+                        chunk_step = 0
+                        chunk_number += 1
+                        inference_requested = False
+                        waiting_for_action_logged = False
                     else:
-                        gripper_state = f'正在闭合✊'
-                else:
-                    gripper_state = f'正在张开🖐️'
+                        print(f"\n⏳ Pi0 推理暂不可用: {result[1]}")
+                        action_chunk = None
+                        inference_requested = False
+                except queue.Empty:
+                    pass
+
+            if action_chunk is None or chunk_step >= len(action_chunk):
+                if not waiting_for_action_logged:
+                    print("\n⏳ 正在等待最新 Pi0 动作块...")
+                    waiting_for_action_logged = True
+                time.sleep(0.01)
+                continue
+
+            if not inference_requested and chunk_step >= max(
+                0, len(action_chunk) - PREFETCH_ACTIONS
+            ):
+                img_g = latest_images["global"]
+                img_w = latest_images["wrist"]
+                if img_g is not None and img_w is not None:
+                    curr_qpos = np.array(
+                        [controller.motors[i].position for i in range(1, 8)]
+                    )
+                    request_queue.put(
+                        {
+                            "cam_global": img_g.copy(),
+                            "cam_wrist": img_w.copy(),
+                            "state": curr_qpos,
+                            "prompt": PROMPT,
+                        }
+                    )
+                    inference_requested = True
+
+            loop_start = time.time()
+            target = action_chunk[chunk_step]
+            curr_qpos = np.array([controller.motors[i].position for i in range(1, 8)])
+            diff_from_home = np.max(np.abs(curr_qpos[:6] - home_arr))
                 
-                for m_id in range(1, 8):
-                    controller.motors[m_id].set_position(safe_target[m_id-1])
+            if not has_left_home and diff_from_home > 15.0:
+                has_left_home = True
+                print("\n🚀 机械臂已离开待机位，开始执行抓取任务！")
                 
-                current_hz = 1.0 / EXEC_INTERVAL
-                print(f"\r[{current_hz:.1f}Hz执行] 步数 {current_global_step:4d} | 离原点偏差:{diff_from_home:.1f}° | 夹爪:{gripper_state}        ", end="")
-                current_global_step += 1
+            if has_left_home and diff_from_home < 5.0:
+                home_counter += 1
             else:
-                print("\r[初始化/极限卡顿] 大脑算力严重不足，正在等待...                   ", end="")
+                home_counter = 0
+                    
+            if home_counter >= HOME_THRESHOLD:
+                print("\n\n🎉 机械臂已完成任务并主动返回 P 键待机位！判定任务结束，准备收车...")
+                break
+                
+            safe_target = target.copy()
+                
+            if safe_target[6] > curr_qpos[6]:
+                motor_7 = controller.motors[7]
+                torque_7 = abs(getattr(motor_7, 'torque', getattr(motor_7, 'current', 0.0)))
+                    
+                TORQUE_THRESHOLD = 0.03
+                if torque_7 > TORQUE_THRESHOLD:
+                    safe_target[6] = curr_qpos[6]
+                    gripper_state = f'受阻锁死🔒 (力矩:{torque_7:.3f})'
+                else:
+                    gripper_state = f'正在闭合✊'
+            else:
+                gripper_state = f'正在张开🖐️'
+
+            for m_id in range(1, 8):
+                lower, upper = JOINT_LIMITS[m_id]
+                safe_target[m_id - 1] = np.clip(
+                    safe_target[m_id - 1], lower, upper
+                )
+                
+            for m_id in range(1, 8):
+                controller.motors[m_id].set_position(safe_target[m_id-1])
+                
+            print(
+                f"\r[Pi0 {EXECUTION_HZ:.1f}Hz] 块 {chunk_number:4d} "
+                f"| 批内 {chunk_step + 1:2d}/{len(action_chunk):2d} "
+                f"| 推理 {latest_infer_time:.3f}s | 总步数 {total_step:5d} "
+                f"| 离原点偏差:{diff_from_home:.1f}° | 夹爪:{gripper_state}        ",
+                end="",
+            )
+            chunk_step += 1
+            total_step += 1
                 
             elapsed = time.time() - loop_start
             time.sleep(max(0, EXEC_INTERVAL - elapsed))
@@ -389,7 +404,15 @@ def main():
         
         print("\n" + "="*50)
         print("📊 【实验结果人工判卷系统】")
-        ans_success = input("1. 本次实验是否【成功完成】抓取与放置？(y/n): ").strip().lower()
+        if step_limit_failed:
+            ans_success = 'n'
+            print(
+                f"1. 本次实验已因达到 {MAX_TOTAL_STEPS} 步自动判定失败。"
+            )
+        else:
+            ans_success = input(
+                "1. 本次实验是否【成功完成】抓取与放置？(y/n): "
+            ).strip().lower()
         ans_collision = input("2. 本次实验是否发生【意外碰撞】？(y/n): ").strip().lower()
         
         if ans_success == 'y':
@@ -404,44 +427,6 @@ def main():
             json.dump(metrics, f, indent=4)
             
         print(f"\n📈 累计数据看板 -> 总启动次数: {metrics['total_trials']} | 成功率: {success_rate:.1f}% | 碰撞率: {collision_rate:.1f}%")
-
-        # ========================================================
-        # 3. 数据集保存抉择逻辑
-        # ========================================================
-        if len(frames_data) > 0:
-            print("\n" + "="*50)
-            choice = input(f"💾 本次推理共后台录制了 {len(frames_data)} 帧 (30Hz) 完整轨迹数据！\n是否将本次运行保存为新的数据集？(y/n): ")
-            if choice.lower() == 'y':
-                base_dir = DATASETS_DIR
-                os.makedirs(base_dir, exist_ok=True)
-                existing_episodes = []
-                for d in os.listdir(base_dir):
-                    if d.startswith("episode_") and os.path.isdir(os.path.join(base_dir, d)):
-                        try:
-                            num = int(d.split("_")[1])
-                            existing_episodes.append(num)
-                        except ValueError: pass
-                        
-                next_ep_num = max(existing_episodes) + 1 if existing_episodes else 1
-                temp_dir = TEMP_EPISODE
-                
-                with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
-                    metadata = json.load(f)
-                metadata["episode_id"] = next_ep_num
-                with open(os.path.join(temp_dir, "metadata.json"), 'w') as f:
-                    json.dump(metadata, f, indent=4)
-                    
-                with open(os.path.join(temp_dir, "data.json"), 'w') as f:
-                    json.dump(frames_data, f, indent=4)
-                    
-                target_dir = os.path.join(base_dir, f"episode_{next_ep_num}")
-                shutil.move(temp_dir, target_dir)
-                print(f"✅ 大丰收！已成功将本次推理数据存入 {target_dir}，直接可用于下一轮训练。")
-            else:
-                shutil.rmtree(TEMP_EPISODE, ignore_errors=True)
-                print("🗑️ 已彻底删除本次推理缓存的数据。")
-        else:
-            shutil.rmtree(TEMP_EPISODE, ignore_errors=True)
 
         print("✅ 部署脚本已彻底安全关闭。")
 

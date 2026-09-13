@@ -243,6 +243,21 @@ class GuiControlTests(unittest.TestCase):
         self.assertFalse(self.control.latched)
         self.assertIn('完成', self.control.last_result)
 
+    def test_stalled_normal_move_requests_hold_and_latches(self):
+        motor = self.controller.motors[1]
+        motor.set_position = lambda target: motor.sent.append(target)
+        self.control.following_error = 5
+        self.control.no_progress_seconds = .03
+        self.control.progress_epsilon = .1
+        self.control.homing_command_retry = .01
+        self.control.move_timeout = .3
+        self.control.move({1: 20})
+        self.join()
+        self.assertTrue(self.control.latched)
+        self.assertTrue(self.control.protective_stop_reason)
+        self.assertEqual(motor.sent[-1], 0)
+        self.assertTrue(any(e['category'] == '保护停止' for e in self.control.events))
+
     def test_task_reservation_is_atomic(self):
         entered = threading.Event()
         def task():

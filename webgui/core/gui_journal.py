@@ -1,6 +1,5 @@
 """Bounded, asynchronous GUI diagnostic journal; never sends motor commands."""
 from collections import deque
-from datetime import datetime
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -15,9 +14,8 @@ import uuid
 def updated_at(received_at, wall=None, monotonic=None):
     if received_at is None or not math.isfinite(received_at):
         return '尚未收到'
-    wall = time.time() if wall is None else wall
     monotonic = time.monotonic() if monotonic is None else monotonic
-    return datetime.fromtimestamp(wall - max(0, monotonic - received_at)).astimezone().isoformat(timespec='milliseconds')
+    return f'{max(0, monotonic - received_at):.2f} 秒前'
 
 
 def clean_json(value):

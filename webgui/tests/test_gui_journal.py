@@ -41,5 +41,6 @@ class JournalTests(unittest.TestCase):
     def test_unknown_update_is_not_displayed_as_now(self):
         self.assertEqual(updated_at(None), '尚未收到')
         self.assertEqual(updated_at(float('inf')), '尚未收到')
-        self.assertEqual(updated_at(90, wall=1000, monotonic=100),
-                         updated_at(90, wall=1010, monotonic=110))
+        self.assertEqual(updated_at(99.85, monotonic=100), '0.15 秒前')
+        self.assertEqual(updated_at(90, wall=1000, monotonic=100), '10.00 秒前')
+        self.assertEqual(updated_at(90, wall=1010, monotonic=110), '20.00 秒前')

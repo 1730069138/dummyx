@@ -3,7 +3,7 @@ from core.paths import MOTORS_CONFIG, RECORDING_FILE, prepare_runtime
 prepare_runtime()
 from nicegui import ui, app
 from core.motorcontroller import MotorController
-from core.gui_control import GuiControl, Rejected, finite
+from core.gui_control import GuiControl, Limits, Rejected, finite
 from core.gui_journal import Journal, updated_at, clean_json
 from core.paths import RUNTIME_DIR
 import argparse
@@ -254,7 +254,8 @@ journal = Journal(RUNTIME_DIR / ('logs-virtual' if options.virtual else 'logs'))
 control = GuiControl(controller, motor_config['nodes'],
                      homing_defaults=motor_config.get('homing_defaults'),
                      commissioning_defaults=motor_config.get('commissioning_defaults'),
-                     manual_defaults=motor_config.get('manual_defaults'), journal=journal)
+                     manual_defaults=motor_config.get('manual_defaults'),
+                     safety_defaults=motor_config.get('safety_defaults'), journal=journal)
 control.events.extend(journal.recent())
 control.log('GUI 控制台启动')
 message_queue = Queue(maxsize=500)
@@ -277,7 +278,9 @@ exit_started_at = None
 exit_stage = '待确认'
 previous_signal_handlers = {}
 node_alarm_states = {}
+node_limit_states = {}
 last_alarm_view = None
+last_can_error_count = 0
 
 
 async def export_diagnostics():
@@ -650,7 +653,7 @@ def shutdown():
 
 
 def refresh():
-    global is_recording, recording_error, last_alarm_view
+    global is_recording, recording_error, last_alarm_view, last_can_error_count
     for _ in range(20):
         if message_queue.empty():
             break
@@ -671,6 +674,21 @@ def refresh():
             node_alarm_states[node_id] = (health, errors)
             control.log(f'J{node_id} {health}' + (f'：{errors}' if errors else ''),
                         category=health, update_result=False)
+        limit_state = '未知'
+        if fresh:
+            try:
+                limits = Limits.read(control.nodes[node_id])
+                margin = min(status['position'] - limits.minimum,
+                             limits.maximum - status['position'])
+                limit_state = (f'接近软限位（余量 {margin:.2f}°）'
+                               if margin <= control.soft_limit_warning else '正常')
+            except Rejected:
+                limit_state = '软限位未核实'
+            if node_limit_states.get(node_id) != limit_state:
+                if limit_state != '正常':
+                    control.log(f'J{node_id} {limit_state}', category='软限位预警',
+                                update_result=False)
+                node_limit_states[node_id] = limit_state
         rows.append({
             'joint': f'J{node_id}',
             'connection': '在线' if fresh else '离线 / 数据过期',
@@ -682,6 +700,7 @@ def refresh():
                        if fresh and control.last_targets[node_id] is not None else '—'),
             'current': f"{status['current']:.3f}" if fresh else '—',
             'fault': errors or ('无' if fresh else '未知'),
+            'safety': limit_state,
             'homed': '已完成' if node_id in control.homed_nodes else '未完成',
             'status_updated': updated_at(status.get('status_received_at')) if status else '尚未收到',
             'position_updated': updated_at(status.get('position_received_at')) if status else '尚未收到',
@@ -689,9 +708,14 @@ def refresh():
     status_table.rows = rows
     status_table.update()
     reason = control.reason([int(joint_select.value)])
-    state_label.set_text('软件停止锁定' if control.latched else
-                         (control.active or ('待命' if not reason else '运动未就绪')))
+    state_label.set_text('保护停止 / 软件锁定' if control.protective_stop_reason else
+                         ('软件停止锁定' if control.latched else
+                          (control.active or ('待命' if not reason else '运动未就绪'))))
     bus_health = controller.get_bus_health()
+    if bus_health['error_frames'] > last_can_error_count:
+        control.log(f"CAN 错误帧累计增加到 {bus_health['error_frames']}",
+                    category='CAN 错误', update_result=False)
+        last_can_error_count = bus_health['error_frames']
     connection_label.set_text(
         f"{'虚拟 CAN' if options.virtual else 'CAN0'} · {online}/{len(control.nodes)} 节点在线 · "
         f"CAN 错误帧 {bus_health['error_frames']}")
@@ -754,7 +778,7 @@ def refresh():
         last_alarm_view = selection
         detail_rows = []
         for event in records:
-            if event.get('category') not in {'任务超时', '驱动器故障', '任务失败', '软件锁定', '正在重试', '反馈过期'}:
+            if event.get('category') not in {'任务超时', '驱动器故障', '任务失败', '软件锁定', '正在重试', '反馈过期', '保护停止', '软限位预警', 'CAN 错误'}:
                 continue
             if alarm_filter.value != '全部' and event.get('category') != alarm_filter.value:
                 continue
@@ -852,8 +876,8 @@ with ui.column().classes('w-full max-w-screen-xl mx-auto p-4 gap-3'):
                 ui.label('关节反馈').classes('text-lg font-bold')
                 columns = [('joint', '关节'), ('connection', '通信'), ('enabled', '使能反馈'),
                            ('homed', '本次调零'), ('position', '角度 (°)'), ('current', '电流 (协议值)'), ('fault', '故障'),
-                           ('target', '最近目标 (°)'), ('motion', '运动状态'),
-                           ('status_updated', '状态更新时间'), ('position_updated', '位置更新时间')]
+                           ('target', '最近目标 (°)'), ('motion', '运动状态'), ('safety', '安全监控'),
+                           ('status_updated', '状态更新'), ('position_updated', '位置更新')]
                 status_table = ui.table(columns=[{'name': k, 'label': label, 'field': k}
                                                 for k, label in columns], rows=[], row_key='joint').classes('w-full')
             with ui.card().classes('w-full mt-3'):
@@ -979,14 +1003,15 @@ with ui.column().classes('w-full max-w-screen-xl mx-auto p-4 gap-3'):
             with ui.row():
                 ui.button('导出本次调试记录', on_click=export_diagnostics)
                 ui.button('加载历史日志', on_click=load_saved_events).props('outline')
-                alarm_filter = ui.select(['全部', '正在重试', '任务超时', '驱动器故障',
+                alarm_filter = ui.select(['全部', '保护停止', '软限位预警', 'CAN 错误',
+                                          '正在重试', '任务超时', '驱动器故障',
                                           '软件锁定', '任务失败', '反馈过期'], value='全部', label='报警筛选')
-            ui.label('故障发生时的各关节快照；电流为协议值，请结合电流更新时间判断。')
+            ui.label('故障发生时的各关节快照；电流为协议值，请结合电流更新间隔判断。')
             alarm_table = ui.table(columns=[{'name': k, 'field': k, 'label': label} for k, label in
                 [('time', '发生时间'), ('category', '类别'), ('joint', '关节'), ('stage', '阶段'),
                  ('target', '目标 (°)'), ('position', '实际 (°)'), ('current', '电流'),
-                 ('fault', '驱动故障'), ('updated', '状态更新时间'), ('position_updated', '位置更新时间'),
-                 ('current_updated', '电流更新时间'), ('message', '详情')]],
+                 ('fault', '驱动故障'), ('updated', '状态更新'), ('position_updated', '位置更新'),
+                 ('current_updated', '电流更新'), ('message', '详情')]],
                 rows=[], pagination=10).classes('w-full')
             ui.label('最近 200 条事件；完整保留范围内的本次日志可导出。')
             event_log = ui.table(columns=[{'name': k, 'label': label, 'field': k}

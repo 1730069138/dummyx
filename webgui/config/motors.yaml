@@ -55,6 +55,12 @@ commissioning_defaults:
   acceleration: 2
   hard_stop_margin_deg: 2
 
+safety_defaults:
+  following_error_deg: 5
+  no_progress_seconds: 3
+  progress_epsilon_deg: 0.2
+  soft_limit_warning_deg: 5
+
 end_pose:
   1: 180
   2: 2

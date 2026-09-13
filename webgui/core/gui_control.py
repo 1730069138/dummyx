@@ -91,7 +91,7 @@ class HomingProfile:
 class GuiControl:
     def __init__(self, controller, nodes, stale_seconds=2.0, move_timeout=30.0,
                  homing_defaults=None, commissioning_defaults=None,
-                 manual_defaults=None, journal=None):
+                 manual_defaults=None, safety_defaults=None, journal=None):
         self.controller = controller
         self.journal = journal
         self.nodes = {n['id']: n for n in nodes}
@@ -112,6 +112,7 @@ class GuiControl:
         self.communication_error = ''
         self.homed_nodes = set()
         self.last_targets = {node_id: None for node_id in self.nodes}
+        self.protective_stop_reason = ''
         defaults = homing_defaults or {}
         self.homing_stall_seconds = finite(defaults.get('stall_seconds', .2), '堵转确认时间')
         self.homing_timeout = finite(defaults.get('search_timeout_seconds', 40), '寻零超时')
@@ -155,6 +156,14 @@ class GuiControl:
         if min(self.manual_velocity, self.manual_acceleration,
                self.manual_max_step, self.manual_min_scale) <= 0 or self.manual_min_scale > 1:
             raise Rejected('手动运行参数无效')
+        safety = safety_defaults or {}
+        self.following_error = finite(safety.get('following_error_deg', 5), '跟随误差阈值')
+        self.no_progress_seconds = finite(safety.get('no_progress_seconds', 3), '无进展确认时间')
+        self.progress_epsilon = finite(safety.get('progress_epsilon_deg', .2), '运动进展阈值')
+        self.soft_limit_warning = finite(safety.get('soft_limit_warning_deg', 5), '软限位预警距离')
+        if min(self.following_error, self.no_progress_seconds,
+               self.progress_epsilon, self.soft_limit_warning) <= 0:
+            raise Rejected('运行安全监控参数必须大于 0')
         configured_pose = manual.get('safe_pose') or {}
         self.safe_pose = {}
         for raw_node_id, value in configured_pose.items():
@@ -419,6 +428,26 @@ class GuiControl:
                 motor.set_float_config(index, value)
                 self._wait(.03)
 
+    def _protective_hold(self, statuses, reason):
+        """Request a position hold where feedback is fresh; never disable a loaded arm."""
+        held, failures = [], []
+        for node_id, status in statuses.items():
+            if node_id not in self.nodes or not status.get('enabled') or not self.fresh(status):
+                continue
+            position = status['position']
+            try:
+                with self.lock:
+                    self.controller.motors[node_id].set_position(position)
+                    self.last_targets[node_id] = position
+                held.append(f'J{node_id}={position:.3f}°')
+            except Exception as error:
+                failures.append(f'J{node_id}: {error}')
+        self.protective_stop_reason = reason
+        suffix = f"；保持目标：{', '.join(held)}" if held else '；没有可用的新鲜位置用于保持'
+        if failures:
+            suffix += f"；发送失败：{'; '.join(failures)}"
+        self.log(f'保护停止：{reason}{suffix}', category='保护停止')
+
     def _move(self, targets, speed_scale=None, require_target_reached=True,
               position_tolerance=1.0):
         # Validate the entire group before sending its first command.
@@ -438,6 +467,8 @@ class GuiControl:
                 self.controller.motors[node_id].set_position(target)
                 self.log(f'J{node_id} 已发送目标 {target:g}°', category='运动指令', update_result=False)
         deadline = time.monotonic() + self.move_timeout
+        progress_positions = {n: None for n in targets}
+        progress_at = {n: time.monotonic() for n in targets}
         while True:
             self._checkpoint()
             statuses = self.active_statuses(targets, enabled=True, limits=True)
@@ -453,6 +484,19 @@ class GuiControl:
             }
             if all(complete.values()):
                 return
+            for node_id, target in targets.items():
+                position = statuses[node_id]['position']
+                if (progress_positions[node_id] is None or
+                        abs(position - progress_positions[node_id]) >= self.progress_epsilon):
+                    progress_positions[node_id] = position
+                    progress_at[node_id] = now
+                error = abs(position - target)
+                if (not complete[node_id] and error > self.following_error and
+                        now - progress_at[node_id] >= self.no_progress_seconds):
+                    reason = (f'J{node_id} 持续 {self.no_progress_seconds:g}s 无有效位移，'
+                              f'目标误差 {error:.2f}°')
+                    self._protective_hold(statuses, reason)
+                    raise Rejected(reason)
             for node_id, target in targets.items():
                 if not complete[node_id] and now - last_command_at[node_id] >= self.homing_command_retry:
                     self.controller.motors[node_id].set_position(target)
