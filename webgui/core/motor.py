@@ -69,11 +69,17 @@ class MotorConfigs:
 class Motor:
     def __init__(self, bus: can.Bus, node_id: int, reduction: float):
         self.bus = bus
+        self.send_timeout = None
         self.node_id = node_id
         self.reduction  = reduction
         self.status = MotorStatus()
         self.configs = MotorConfigs()
         self.last_message_time = 0
+        # GUI independently checks status and position freshness using a monotonic clock.
+        self.status_received_at = None
+        self.position_received_at = None
+        self.velocity_received_at = None
+        self.current_received_at = None
         self.position = 0.0
         self.saved_position = 0.0
         self.motor_current = 0.0
@@ -96,7 +102,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
         print(f"Motor {self.node_id}: Sent ENABLE command")
 
 
@@ -108,7 +114,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
 
 
     def reference_saved_position(self):
@@ -119,66 +125,35 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
 
 
     def reference_value1(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_ID_GET_VALUE1)
-        msg = can.Message(
-            arbitration_id=tx_id,
-            data=[STATUS_ITEMS[POSITION]],
-            is_extended_id=False
-        )
-        with self.lock:
-            self.bus.send(msg)
+        for item in STATUS_ITEMS:
+            msg = can.Message(arbitration_id=tx_id, data=[item], is_extended_id=False)
+            with self.lock:
+                self.bus.send(msg, timeout=self.send_timeout)
 
-        msg = can.Message(
-            arbitration_id=tx_id,
-            data=[STATUS_ITEMS[VELOCITY]],
-            is_extended_id=False
-        )
-        with self.lock:
-            self.bus.send(msg)
+    def reference_feedback(self, items, inter_request_delay=0.02):
+        tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_ID_GET_VALUE1)
+        items = tuple(items)
+        for index, item in enumerate(items):
+            msg = can.Message(arbitration_id=tx_id, data=[item], is_extended_id=False)
+            with self.lock:
+                self.bus.send(msg, timeout=self.send_timeout)
+            if index < len(items) - 1 and inter_request_delay:
+                time.sleep(inter_request_delay)
 
-        msg = can.Message(
-            arbitration_id=tx_id,
-            data=[STATUS_ITEMS[TORQUE]],
-            is_extended_id=False
-        )
-        with self.lock:
-            self.bus.send(msg)
+    def reference_motion_feedback(self, inter_request_delay=0.02):
+        """Request feedback required while detecting a homing collision."""
+        self.reference_feedback((POSITION, VELOCITY, MOTOR_CURRENT), inter_request_delay)
 
-        msg = can.Message(
-            arbitration_id=tx_id,
-            data=[STATUS_ITEMS[BUS_CURRENT]],
-            is_extended_id=False
-        )
-        with self.lock:
-            self.bus.send(msg)
+    def reference_position_feedback(self):
+        self.reference_feedback((POSITION,), 0)
 
-        msg = can.Message(
-            arbitration_id=tx_id,
-            data=[STATUS_ITEMS[BUS_VOLTAGE]],
-            is_extended_id=False
-        )
-        with self.lock:
-            self.bus.send(msg)
-
-        msg = can.Message(
-            arbitration_id=tx_id,
-            data=[STATUS_ITEMS[MOTOR_POWER]],
-            is_extended_id=False
-        )
-        with self.lock:
-            self.bus.send(msg)
-
-        msg = can.Message(
-            arbitration_id=tx_id,
-            data=[STATUS_ITEMS[MOTOR_CURRENT]],
-            is_extended_id=False
-        )
-        with self.lock:
-            self.bus.send(msg)
+    def reference_current_feedback(self):
+        self.reference_feedback((MOTOR_CURRENT,), 0)
 
     def disable(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_ID_MOTOR_DISABLE)
@@ -188,7 +163,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
         print(f"Motor {self.node_id}: Sent DISABLE command")
     
     def degrees_to_turns(self, degrees: float) -> float:
@@ -207,8 +182,20 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
         print(f"Motor {self.node_id}: Sent SET_POSITION: {position} degrees")
+
+    def set_float_config(self, index: int, value: float):
+        """Write one floating-point drive setting through the serialized bus path."""
+        if index not in {CURRENT_LIMIT, PROFILE_VELOCITY, PROFILE_ACCEL,
+                         PROFILE_DECEL, PROTECT_OVER_CURRENT}:
+            raise ValueError(f'unsupported float config index: {index}')
+        tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_SET_CONFIG)
+        msg = can.Message(arbitration_id=tx_id,
+                          data=struct.pack("<If", index, float(value)),
+                          is_extended_id=False)
+        with self.lock:
+            self.bus.send(msg, timeout=self.send_timeout)
 
     def set_home(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_ID_SET_HOME)
@@ -219,7 +206,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
 
     def set_homing_velocities(self,  velocity: float, acceleration: float, deceleration: float):
         
@@ -231,7 +218,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
 
         data = struct.pack("<If", PROFILE_ACCEL, acceleration)
         msg = can.Message(
@@ -240,7 +227,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
         
         time.sleep(1)
 
@@ -251,7 +238,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
 
     def set_homing_current(self,  homing_current: float):
 
@@ -264,7 +251,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
 
         data = struct.pack("<If", PROTECT_OVER_CURRENT, homing_current)
         msg = can.Message(
@@ -273,7 +260,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
 
     def set_homing(self, homing_current: float, homing_position, homing_expected_position, timeout, tolerance):
         # 将电流设为较低值以保护电机
@@ -354,7 +341,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)    
+            self.bus.send(msg, timeout=self.send_timeout)    
 
     def set_stop_damping_mode(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_SET_CONFIG)
@@ -365,7 +352,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)    
+            self.bus.send(msg, timeout=self.send_timeout)    
 
     def set_speed_mode (self, value):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_SET_CONFIG)
@@ -376,7 +363,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)    
+            self.bus.send(msg, timeout=self.send_timeout)    
 
         data = struct.pack("<If", PROFILE_ACCEL, value[1])
         msg = can.Message(
@@ -385,7 +372,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)    
+            self.bus.send(msg, timeout=self.send_timeout)    
 
         data = struct.pack("<If", PROFILE_DECEL, value[2])
         msg = can.Message(
@@ -394,7 +381,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)    
+            self.bus.send(msg, timeout=self.send_timeout)    
 
     def set_config(self, value):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_SET_CONFIG)
@@ -430,7 +417,7 @@ class Motor:
                 is_extended_id=False
             )
             with self.lock:
-                self.bus.send(msg)    
+                self.bus.send(msg, timeout=self.send_timeout)    
     def save_configs(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CAN_CMD_SAVE_ALL_CONFIG)
         msg = can.Message(
@@ -439,7 +426,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-           self.bus.send(msg)
+           self.bus.send(msg, timeout=self.send_timeout)
 
     def error_resets(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CAN_CMD_ERROR_RESET)
@@ -449,7 +436,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-           self.bus.send(msg)
+           self.bus.send(msg, timeout=self.send_timeout)
 
     def get_config(self):
         tx_id = self.build_can_id(dir_bit=0, cmd_id=CMD_GET_CONFIG)
@@ -461,7 +448,7 @@ class Motor:
                 is_extended_id=False
             )
             with self.lock:
-                self.bus.send(msg)
+                self.bus.send(msg, timeout=self.send_timeout)
             print(f"Motor {self.node_id}: Sent GET_CONFIG index={index}")
 
     def start_calibration(self):
@@ -473,7 +460,7 @@ class Motor:
             is_extended_id=False
         )
         with self.lock:
-            self.bus.send(msg)
+            self.bus.send(msg, timeout=self.send_timeout)
 
     def update_calibrate_status(self, msg: can.Message):
         if len(msg.data) >= 4:
@@ -561,6 +548,7 @@ class Motor:
                 self.status.under_voltage = bool(error & 0x20000)
                 self.status.over_current = bool(error & 0x40000)
                 self.last_message_time = time.time()
+                self.status_received_at = time.monotonic()
 
     def update_status_all(self, msg: can.Message):
         if len(msg.data) >= 8:
@@ -571,10 +559,13 @@ class Motor:
                         self.motor_torque = l
                     case 1:
                         self.motor_velocity = l
+                        self.velocity_received_at = time.monotonic()
                     case 2:
                         self.position = self.turns_to_degrees(l)
+                        self.position_received_at = time.monotonic()
                     case 3:
                         self.motor_current = l
+                        self.current_received_at = time.monotonic()
                     case  4:
                         self.bus_voltage = l
                     case  5:
@@ -603,6 +594,14 @@ class Motor:
                     'over_current': self.status.over_current,
                 },
                 'last_update': time.time() - self.last_message_time,
+                'status_age': (time.monotonic() - self.status_received_at
+                               if self.status_received_at is not None else float('inf')),
+                'position_age': (time.monotonic() - self.position_received_at
+                                 if self.position_received_at is not None else float('inf')),
+                'status_received_at': self.status_received_at,
+                'position_received_at': self.position_received_at,
+                'velocity_received_at': self.velocity_received_at,
+                'current_received_at': self.current_received_at,
                 'position': self.position,
                 'saved_position': self.saved_position,
                 'velocity': self.motor_velocity,

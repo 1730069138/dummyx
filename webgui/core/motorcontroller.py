@@ -2,6 +2,7 @@ import can
 from typing import Optional, Dict, List
 from core.motor import Motor, CMD_ID_GET_SAVED_POSITION, CMD_ID_STATUSWORD_REPORT, CMD_GET_CONFIG, CMD_ID_GET_STATUS, CMD_ID_GET_VALUE1, CAN_CMD_SAVE_ALL_CONFIG, CAN_CMD_CALIB_START, CAN_CMD_CALIB_REPORT
 import threading
+import time
 
 class MotorController:
     def __init__(self, interface: str = 'socketcan', channel: str = 'can0'):
@@ -15,6 +16,9 @@ class MotorController:
         self.message_lock = threading.Lock()
         self.running = False
         self.notifier = None
+        self.can_error_count = 0
+        self.last_can_error_at = None
+        self.last_can_error_data = ''
     
     def add_motor(self, node_id: int, reduction: float) -> Motor:
         if node_id in self.motors:
@@ -27,6 +31,11 @@ class MotorController:
     
     def on_message_received(self, msg):
         with self.message_lock:
+            if msg.is_error_frame:
+                self.can_error_count += 1
+                self.last_can_error_at = time.monotonic()
+                self.last_can_error_data = bytes(msg.data).hex()
+                return
             self.message_dict[msg.arbitration_id] = msg
             dir_bit = (msg.arbitration_id >> 10) & 0x1
             node_id = (msg.arbitration_id >> 5) & 0x1F
@@ -74,3 +83,12 @@ class MotorController:
     
     def is_initialized(self) -> bool:
         return self.bus is not None
+
+    def get_bus_health(self) -> dict:
+        with self.message_lock:
+            return {
+                'error_frames': self.can_error_count,
+                'last_error_age': (time.monotonic() - self.last_can_error_at
+                                   if self.last_can_error_at is not None else None),
+                'last_error_data': self.last_can_error_data,
+            }
