@@ -18,3 +18,12 @@ experiment_metrics.json
 .env
 .env.*
 temp_episode/
+
+# 版本化数据集与本地压缩包
+datasets*/
+datasets*.zip
+
+# 本地工具配置与人工备份
+.codex/
+.agents/
+backups/

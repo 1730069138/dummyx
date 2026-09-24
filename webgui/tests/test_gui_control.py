@@ -198,6 +198,32 @@ class GuiControlTests(unittest.TestCase):
         self.control.safe_pose = {1: 0, 2: 1}
         self.assertEqual(self.control.configured_safe_pose(), {1: 0, 2: 1})
 
+    def test_configured_vla_start_pose_requires_every_joint(self):
+        self.control.vla_start_pose = {1: 0}
+        with self.assertRaises(Rejected):
+            self.control.configured_vla_start_pose()
+        self.control.vla_start_pose = {1: 0, 2: 1}
+        self.assertEqual(self.control.configured_vla_start_pose(), {1: 0, 2: 1})
+
+    def test_relaxed_move_accepts_stable_position_within_tolerance(self):
+        motor = self.controller.motors[1]
+        self.nodes[0]['limits']['min_deg'] = 10
+        motor.arrive = False
+        motor.position = 8.01
+
+        def stable_under_gravity(target):
+            motor.sent.append(target)
+            motor.position = target - 1.99
+            motor.timestamp = time.monotonic()
+
+        motor.set_position = stable_under_gravity
+        self.control.move({1: 10}, require_target_reached=False,
+                          position_tolerance=2.0, settle_seconds=.03,
+                          feedback_limit_tolerance=2.0)
+        self.join()
+        self.assertFalse(self.control.latched)
+        self.assertGreaterEqual(len(motor.sent), 1)
+
     def test_preflight_entire_sequence(self):
         with self.assertRaises(Rejected):
             self.control.sequence([({1: 10}, 0), ({1: 200}, 0)])

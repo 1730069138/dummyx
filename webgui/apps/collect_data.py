@@ -39,6 +39,12 @@ class DataCollector:
         
         # 目标位置缓存
         self.targets = {i: 0.0 for i in range(1, 8)}
+        self.vla_start_pose = {}
+        self.pose_tolerance = 10.0
+        self.standby_pose = {
+            1: 180.0, 2: 80.0, 3: -100.0,
+            4: -120.0, 5: 115.0, 6: 140.0, 7: -115.0
+        }
         
         # 各关节物理安全角度限制 （最小值、最大值）
         self.joint_limits = {
@@ -75,34 +81,35 @@ class DataCollector:
         print("[1/4] 正在加载 motors.yaml 并接入 CAN 总线...")
         with open(MOTORS_CONFIG, 'r') as f:
             motor_config = yaml.safe_load(f)
+        configured_vla_pose = (motor_config.get('manual_defaults') or {}).get('vla_start_pose') or {}
+        node_ids = {int(node['id']) for node in motor_config['nodes']}
+        try:
+            self.vla_start_pose = {int(node_id): float(position)
+                                   for node_id, position in configured_vla_pose.items()}
+        except (TypeError, ValueError):
+            raise RuntimeError('motors.yaml 中的 VLA 起始姿态包含非法数值') from None
+        if set(self.vla_start_pose) != node_ids:
+            missing = sorted(node_ids - set(self.vla_start_pose))
+            raise RuntimeError('VLA 起始姿态配置不完整，缺少：' + ', '.join(f'J{i}' for i in missing))
+        for node in motor_config['nodes']:
+            limits = node.get('limits') or {}
+            position = self.vla_start_pose[int(node['id'])]
+            if not limits.get('verified') or not float(limits['min_deg']) <= position <= float(limits['max_deg']):
+                raise RuntimeError(f"VLA 起始姿态 J{node['id']}={position:g}° 未通过已核实软限位")
         for node in motor_config['nodes']:
             self.controller.add_motor(node['id'], reduction=node['reduction'])
             
         if self.controller.is_initialized():
             self.controller.start()
-            
-            # ------------------ 新增：驱动至固定初始姿态 ------------------
-            print("[2/4] 正在将机械臂驱动至设定的初始姿态...")
-            initial_poses = {
-                1: 180.0,
-                2: 80.0,
-                3: -100.0,
-                4: -120.0,
-                5: 115.0,
-                6: 140.0,
-                7: -115.0
-            }
-            
+
+            print("[2/4] 正在读取当前位置并整组前往 VLA 起始姿态...")
             for i in range(1, 8):
                 motor = self.controller.motors.get(i)
                 if motor:
-                    motor.set_position(initial_poses[i])
-                    print(f"      -> 指令下发: 关节 [{i}] 目标 {initial_poses[i]}°")
-                    
-            print("      等待机械臂到达初始位置 (3秒)...")
-            time.sleep(3.0)
+                    motor.reference_status()
+            time.sleep(0.5)
+            self.move_to_vla_start_pose()
 
-            # --------------------------------------------------------------
             print("[3/4] 正在重新读取底层真实电机位置，作为键盘控制的基准...")
             for i in range(1, 8):
                 motor = self.controller.motors.get(i)
@@ -144,46 +151,51 @@ class DataCollector:
         if not os.path.exists(DATASETS_DIR):
             os.makedirs(DATASETS_DIR)
 
+    def _move_pose(self, pose, name):
+        """仿照 GUI 结束归位：整组目标快速下发，再统一等待到位。"""
+        print(f"\n\n[系统] 正在前往{name}（全部关节同时运动）...")
+        connected = [m_id for m_id in pose if m_id in self.controller.motors]
+        missing = sorted(set(pose) - set(connected))
+        if missing:
+            print(f"[系统] ❌ {name}未下发，缺少电机："
+                  f"{', '.join(f'J{i}' for i in missing)}\n")
+            return False
+
+        last_command_at = {}
+        for m_id in connected:
+            pos = pose[m_id]
+            self.targets[m_id] = pos
+            self.controller.motors[m_id].set_position(pos)
+            last_command_at[m_id] = time.time()
+
+        start_t = time.time()
+        while True:
+            pending = [m_id for m_id in connected
+                       if abs(self.controller.motors[m_id].position - pose[m_id]) >
+                       self.pose_tolerance]
+            if not pending:
+                print(f"[系统] ✅ 已到达{name}。\n")
+                return True
+
+            now = time.time()
+            if now - start_t > 15.0:
+                print(f"[系统] ⚠️ {name}等待超时，未到位关节："
+                      f"{', '.join(f'J{i}' for i in pending)}\n")
+                return False
+
+            for m_id in pending:
+                if now - last_command_at[m_id] >= 0.5:
+                    self.controller.motors[m_id].set_position(pose[m_id])
+                    last_command_at[m_id] = now
+            time.sleep(0.05)
+
     def park_robot(self):
-        """安全收臂：逆序逐一返回全局待机姿态"""
-        homing_params = {
-            1: 180.0, 2: 80.0, 3: -100.0, 
-            4: -120.0, 5: 115.0, 6: 140.0, 7: -115.0
-        }
-        print("\n\n[系统] 正在执行安全收臂：从末端向基座逆序归位...")
-        
-        for m_id in sorted(homing_params.keys(), reverse=True):
-            if m_id in self.controller.motors:
-                pos = homing_params[m_id]
-                self.targets[m_id] = pos  
-                motor = self.controller.motors[m_id]
-                motor.set_position(pos)
-                
-                reach_timeout = 10.0
-                start_t = time.time()
-                reached = False
-                
-                while True:
-                    if time.time() - start_t > reach_timeout:
-                        break
-                        
-                    curr_pos = motor.position
-                    diff = abs(curr_pos - pos)
-                    sys.stdout.write(f"\r      -> 正在收回 关节 [{m_id}] : 当前 {curr_pos:6.1f}° / 目标 {pos:6.1f}° (偏差: {diff:5.1f}°)   ")
-                    sys.stdout.flush()
-                    if diff < 1.5:
-                        reached = True
-                        break
-                    time.sleep(0.05)
-                
-                print() 
-                if reached:
-                    print(f"      ✅ 关节 [{m_id}] 已就位。")
-                    time.sleep(0.2) 
-                else:
-                    print(f"      ⚠️ 警告: 关节 [{m_id}] 移动超时！")
-        
-        print("[系统] 逆序归位全部完成！随时可进行下一步操作。\n")
+        """全部关节同时返回待机姿态。"""
+        self._move_pose(self.standby_pose, '全局待机姿态')
+
+    def move_to_vla_start_pose(self):
+        """全部关节同时前往 VLA 起始姿态。"""
+        self._move_pose(self.vla_start_pose, 'VLA 起始姿态')
 
     def auto_operate_gripper(self, action):
         """极速专属控制逻辑"""
@@ -250,7 +262,7 @@ class DataCollector:
         print(" [R/F] -> 关节4    [T/G] -> 关节5    [Y/H] -> 关节6")
         print(" [U/J] -> 关节7")
         print("\n [=] -> 增大单次步长    [-] -> 减小单次步长")
-        print(" 位置控制: [P] 逆序一键返回全局待机姿态 (Home)")
+        print(" 位置控制: [P] 返回全局待机姿态 | [O] 前往 VLA 起始姿态")
         print(" 录制控制: [C] 开始录制 | [V] 停止并保存 | [B] 回放上次序列")
         print(" [ESC] 或 [Ctrl+C] 退出当前脚本 (维持原状态抱死)")
         print("="*60 + "\n")
@@ -307,6 +319,8 @@ class DataCollector:
                         
                 elif ch == 'p':
                     self.park_robot()
+                elif ch == 'o':
+                    self.move_to_vla_start_pose()
                 elif ch == 'c':
                     if not self.is_recording: self.start_recording()
                 elif ch == 'v':

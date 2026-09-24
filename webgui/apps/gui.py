@@ -341,7 +341,8 @@ async def finish_exit(return_to_pose):
             if set(targets) != set(control.nodes):
                 raise Rejected('工作结束姿态必须包含全部关节')
             control.move(targets, speed_scale(), '工作结束归位',
-                         require_target_reached=False, position_tolerance=1.0)
+                         require_target_reached=False, position_tolerance=2.0,
+                         settle_seconds=0.3, feedback_limit_tolerance=2.0)
             worker = control.worker
             while worker.is_alive():
                 await asyncio.sleep(.1)
@@ -452,6 +453,29 @@ def request_named_pose(name, targets):
     details = '，'.join(f'J{node_id}={target:g}°' for node_id, target in targets.items())
     confirm(f'移动到{name}', details + '。确认机械臂到目标之间的空间路径畅通。',
             lambda: control.move(targets, speed_scale(), name))
+
+
+def request_save_vla_start_pose():
+    targets = {node_id: finite(field.value, f'J{node_id} VLA 起始角度')
+               for node_id, field in joint_target_inputs.items()}
+    control.validate_targets(targets)
+
+    def save():
+        with control.lock:
+            checked = control.validate_targets(targets)
+            candidate = copy.deepcopy(motor_config)
+            candidate.setdefault('manual_defaults', {})['vla_start_pose'] = checked
+            temporary = MOTORS_CONFIG.with_suffix('.yaml.tmp')
+            temporary.write_text(yaml.safe_dump(candidate, allow_unicode=True, sort_keys=False),
+                                 encoding='utf-8')
+            temporary.replace(MOTORS_CONFIG)
+            motor_config.setdefault('manual_defaults', {})['vla_start_pose'] = checked
+            control.vla_start_pose = dict(checked)
+            control.log('已保存 VLA 起始姿态：' +
+                        '，'.join(f'J{n}={v:g}°' for n, v in checked.items()))
+
+    details = '，'.join(f'J{node_id}={target:g}°' for node_id, target in targets.items())
+    confirm('保存 VLA 起始姿态', details + '。此配置将供数据采集脚本 P 键归位使用。', save)
 
 
 def request_loop():
@@ -905,7 +929,7 @@ with ui.column().classes('w-full max-w-screen-xl mx-auto p-4 gap-3'):
                 with ui.row().classes('items-end'):
                     for node_id in control.nodes:
                         limits = control.nodes[node_id]['limits']
-                        initial = control.safe_pose.get(node_id)
+                        initial = control.vla_start_pose.get(node_id, control.safe_pose.get(node_id))
                         joint_target_inputs[node_id] = ui.number(
                             f"J{node_id} [{limits['min_deg']:g}, {limits['max_deg']:g}]°",
                             value=initial, format='%.3f').classes('w-40')
@@ -914,6 +938,12 @@ with ui.column().classes('w-full max-w-screen-xl mx-auto p-4 gap-3'):
                         '填入当前位置', on_click=lambda: invoke(fill_group_from_current)).props('outline'))
                     group_motion_widgets.append(ui.button(
                         '执行整组目标', on_click=lambda: invoke(request_group_move), color='primary'))
+                    group_motion_widgets.append(ui.button(
+                        '保存为 VLA 起始姿态', on_click=lambda: invoke(request_save_vla_start_pose),
+                        color='positive'))
+                    group_motion_widgets.append(ui.button(
+                        '执行 VLA 起始姿态', on_click=lambda: invoke(lambda: request_named_pose(
+                            'VLA 起始姿态', control.configured_vla_start_pose()))).props('outline'))
                     group_motion_widgets.append(ui.button(
                         '安全姿态', on_click=lambda: invoke(lambda: request_named_pose(
                             '安全姿态', control.configured_safe_pose()))).props('outline'))

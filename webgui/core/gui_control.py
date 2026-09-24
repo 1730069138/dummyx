@@ -174,6 +174,8 @@ class GuiControl:
             if node_id not in self.nodes:
                 raise Rejected(f'安全姿态包含未知关节 J{node_id}')
             self.safe_pose[node_id] = Limits.read(self.nodes[node_id]).check(value)
+        configured_vla_pose = manual.get('vla_start_pose') or {}
+        self.vla_start_pose = self._configured_pose(configured_vla_pose, 'VLA 起始姿态')
 
     @property
     def progress(self):
@@ -220,7 +222,8 @@ class GuiControl:
         return (status['status_age'] <= self.stale_seconds and
                 status['position_age'] <= self.stale_seconds)
 
-    def check_nodes(self, ids, enabled=False, limits=False, allow_fault=False):
+    def check_nodes(self, ids, enabled=False, limits=False, allow_fault=False,
+                    limit_tolerance=0.0):
         if self.closed:
             raise Rejected('控制服务已关闭')
         if not self.controller.is_initialized() or self.communication_error:
@@ -238,10 +241,15 @@ class GuiControl:
             if enabled and not status['enabled']:
                 raise Rejected(f'J{node_id} 未使能')
             if limits:
-                Limits.read(self.nodes[node_id]).check(status['position'])
+                envelope = Limits.read(self.nodes[node_id])
+                if not (envelope.minimum - limit_tolerance <= status['position'] <=
+                        envelope.maximum + limit_tolerance):
+                    raise Rejected(f"J{node_id} 位置 {status['position']:g}° 超出 "
+                                   f"[{envelope.minimum:g}, {envelope.maximum:g}]°")
         return statuses
 
-    def active_statuses(self, ids, enabled=None, limits=False, allow_fault=False):
+    def active_statuses(self, ids, enabled=None, limits=False, allow_fault=False,
+                        limit_tolerance=0.0):
         """Validate an active task without treating one dropped status reply as offline.
 
         A command may be retried only while position feedback remains fresh. A
@@ -270,7 +278,11 @@ class GuiControl:
             if enabled is False and status['enabled'] and status['status_age'] <= self.stale_seconds:
                 raise Rejected(f'J{node_id} 仍处于使能状态')
             if limits:
-                Limits.read(self.nodes[node_id]).check(status['position'])
+                envelope = Limits.read(self.nodes[node_id])
+                if not (envelope.minimum - limit_tolerance <= status['position'] <=
+                        envelope.maximum + limit_tolerance):
+                    raise Rejected(f"J{node_id} 位置 {status['position']:g}° 超出 "
+                                   f"[{envelope.minimum:g}, {envelope.maximum:g}]°")
             result[node_id] = status
         return result
 
@@ -397,13 +409,14 @@ class GuiControl:
             self.worker = threading.Thread(target=run, daemon=True, name='gui-command')
             self.worker.start()
 
-    def validate_targets(self, targets):
+    def validate_targets(self, targets, feedback_limit_tolerance=0.0):
         if not targets:
             raise Rejected('未选择关节')
         missing = [n for n in targets if self.nodes.get(n, {}).get('homing') and n not in self.homed_nodes]
         if missing:
             raise Rejected('本次启动尚未完成碰撞调零：' + ', '.join(f'J{n}' for n in missing))
-        self.check_nodes(targets, enabled=True, limits=True)
+        self.check_nodes(targets, enabled=True, limits=True,
+                         limit_tolerance=feedback_limit_tolerance)
         result = {}
         for node_id, value in targets.items():
             if node_id not in self.nodes:
@@ -449,9 +462,10 @@ class GuiControl:
         self.log(f'保护停止：{reason}{suffix}', category='保护停止')
 
     def _move(self, targets, speed_scale=None, require_target_reached=True,
-              position_tolerance=1.0):
+              position_tolerance=1.0, settle_seconds=0.0,
+              feedback_limit_tolerance=0.0):
         # Validate the entire group before sending its first command.
-        targets = self.validate_targets(targets)
+        targets = self.validate_targets(targets, feedback_limit_tolerance)
         if speed_scale is not None:
             self._configure_manual_profile(targets, speed_scale)
         sent_at = {}
@@ -460,7 +474,8 @@ class GuiControl:
         for node_id, target in targets.items():
             with self.lock:
                 self._checkpoint()
-                self.check_nodes(targets, enabled=True, limits=True)
+                self.check_nodes(targets, enabled=True, limits=True,
+                                 limit_tolerance=feedback_limit_tolerance)
                 sent_at[node_id] = time.monotonic()
                 last_command_at[node_id] = sent_at[node_id]
                 self.last_targets[node_id] = target
@@ -471,10 +486,12 @@ class GuiControl:
         progress_at = {n: time.monotonic() for n in targets}
         while True:
             self._checkpoint()
-            statuses = self.active_statuses(targets, enabled=True, limits=True)
+            statuses = self.active_statuses(
+                targets, enabled=True, limits=True,
+                limit_tolerance=feedback_limit_tolerance)
             now = time.monotonic()
             # Require post-command status AND position responses, not old zero values.
-            complete = {
+            feedback_complete = {
                 n: ((statuses[n]['position_received_at'] or 0) > sent_at[n] and
                     (statuses[n]['status_received_at'] or 0) > sent_at[n] and
                     statuses[n]['status_age'] <= self.stale_seconds and
@@ -482,8 +499,6 @@ class GuiControl:
                     abs(statuses[n]['position'] - target) <= position_tolerance)
                 for n, target in targets.items()
             }
-            if all(complete.values()):
-                return
             for node_id, target in targets.items():
                 position = statuses[node_id]['position']
                 if (progress_positions[node_id] is None or
@@ -491,12 +506,19 @@ class GuiControl:
                     progress_positions[node_id] = position
                     progress_at[node_id] = now
                 error = abs(position - target)
-                if (not complete[node_id] and error > self.following_error and
+                if (not feedback_complete[node_id] and error > self.following_error and
                         now - progress_at[node_id] >= self.no_progress_seconds):
                     reason = (f'J{node_id} 持续 {self.no_progress_seconds:g}s 无有效位移，'
                               f'目标误差 {error:.2f}°')
                     self._protective_hold(statuses, reason)
                     raise Rejected(reason)
+            complete = {
+                node_id: (feedback_complete[node_id] and
+                          now - progress_at[node_id] >= settle_seconds)
+                for node_id in targets
+            }
+            if all(complete.values()):
+                return
             for node_id, target in targets.items():
                 if not complete[node_id] and now - last_command_at[node_id] >= self.homing_command_retry:
                     self.controller.motors[node_id].set_position(target)
@@ -509,16 +531,25 @@ class GuiControl:
             self._wait(0.05)
 
     def move(self, targets, speed_scale=None, name='定位',
-             require_target_reached=True, position_tolerance=1.0):
-        targets = self.validate_targets(targets)
+             require_target_reached=True, position_tolerance=1.0, settle_seconds=0.0,
+             feedback_limit_tolerance=0.0):
+        feedback_limit_tolerance = finite(feedback_limit_tolerance, '反馈软限位容差')
+        if feedback_limit_tolerance < 0:
+            raise Rejected('反馈软限位容差不能小于 0')
+        targets = self.validate_targets(targets, feedback_limit_tolerance)
         if speed_scale is not None:
             self._manual_profile(speed_scale)
         position_tolerance = finite(position_tolerance, '到位容差')
         if position_tolerance <= 0:
             raise Rejected('到位容差必须大于 0')
+        settle_seconds = finite(settle_seconds, '稳定确认时间')
+        if settle_seconds < 0:
+            raise Rejected('稳定确认时间不能小于 0')
         self.submit(name, lambda: self._move(targets, speed_scale,
                                              require_target_reached,
-                                             position_tolerance))
+                                             position_tolerance,
+                                             settle_seconds,
+                                             feedback_limit_tolerance))
 
     def jog(self, node_id, delta, speed_scale):
         node_id = int(node_id)
@@ -539,6 +570,24 @@ class GuiControl:
             missing = sorted(set(self.nodes) - set(self.safe_pose))
             raise Rejected('安全姿态配置不完整：' + ', '.join(f'J{n}' for n in missing))
         return dict(self.safe_pose)
+
+    def _configured_pose(self, configured, name):
+        pose = {}
+        for raw_node_id, value in configured.items():
+            try:
+                node_id = int(raw_node_id)
+            except (TypeError, ValueError):
+                raise Rejected(f'{name}包含非法关节编号：{raw_node_id}') from None
+            if node_id not in self.nodes:
+                raise Rejected(f'{name}包含未知关节 J{node_id}')
+            pose[node_id] = Limits.read(self.nodes[node_id]).check(value)
+        return pose
+
+    def configured_vla_start_pose(self):
+        if set(self.vla_start_pose) != set(self.nodes):
+            missing = sorted(set(self.nodes) - set(self.vla_start_pose))
+            raise Rejected('VLA 起始姿态配置不完整：' + ', '.join(f'J{n}' for n in missing))
+        return dict(self.vla_start_pose)
 
     def sequence(self, steps, name='轨迹回放', speed_scale=None):
         # Freeze & validate every target and interval before starting the sequence.
